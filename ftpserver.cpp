@@ -12,6 +12,7 @@
 #include <signal.h>
 #include <netdb.h>
 #include <arpa/inet.h>		//needed for creating Internet addresses
+#include <unordered_map> 	//needed for hashmap
 
 #define BUFFER 1024
 
@@ -23,7 +24,9 @@ struct thread_data{
 };
 
 char homeDir[BUFFER];
+std::unordered_map<std::string, int> months;//hashmap test
 
+//DirectoryShit not fixed
 void get_file(char* filename, int sockid){
 	//open file and send file status to client
 	char *status = "NULL";
@@ -100,6 +103,7 @@ void get_file(char* filename, int sockid){
 	} //else
 } //void get_file(char* filename, int sockid)
 
+//DirectoryShit not fixed
 void put_file(char* filename, int sockid){
 	char buf[BUFFER];
 	memset(buf, '\0', BUFFER);
@@ -205,7 +209,11 @@ void *Echo (void *threadargs){
 					strcpy(str, "DELETE error: must have exactly one argument\n");
 				}
 				else{
-					if (remove(cargs)!=0){
+					char path[1024];
+					strcpy(path, cwd);
+					strcat(path, "/");
+					strcat(path, cargs);
+					if (remove(path)!=0){
 						perror("Error deleting file");
 						strcpy(str, "Couldn't delete the file: ");
 						strcat(str, cargs);
@@ -226,11 +234,7 @@ void *Echo (void *threadargs){
 					DIR *dir;
 					struct dirent *entry;
 					char lsContents[BUFFER]="\n";
-					if (getcwd(cwd, sizeof(cwd)) == NULL){
-						perror("Couldn't get current working directory");
-						strcpy(str, "Couldn't get current working directory\n");
-					}
-					else if ((dir = opendir(cwd)) == NULL){
+					if ((dir = opendir(cwd)) == NULL){
 						perror("Opening the directory");
 						strcpy(str, "Failed to open directory object\n");
 					}
@@ -251,26 +255,36 @@ void *Echo (void *threadargs){
 				
 			} //ls request
 			else if(strcmp(command, "cd")==0){
+				char path[1024];
+				strcpy(path, cwd);
+				strcat(path, "/");
+				strcat(path, cargs);
 				if (cargs==NULL || extraArgs){
 					printf("CD: Invalid number of arguments\n");
 					strcpy(str, "CD error: must have exactly one argument\n");
 				}
-				else if (chdir(cargs)!=0){
+				else if (chdir(path)!=0){
 					perror("chdir() error");
 					strcpy(str, "Failed to change directory\n");
 				}
 				else{
+					getcwd(cwd, sizeof(cwd));
 					strcpy(str, "Successfully changed the working directory!\n");
 				}
 				
 			} //cd request
+			//DirectoryShit not fixed
 			else if(strcmp(command, "mkdir")==0 ){
+				char path[1024];
+				strcpy(path, cwd);
+				strcat(path, "/");
+				strcat(path, cargs);
 				if (cargs==NULL || extraArgs){
 					printf("MKDIR: Invalid number of arguments\n");
 					strcpy(str, "MKDIR error: must have exactly one argument\n");
 				}
 				else{
-					if (mkdir(cargs, S_IRWXU|S_IRGRP|S_IXGRP) != 0){
+					if (mkdir(path, S_IRWXU|S_IRGRP|S_IXGRP) != 0){
 						perror("mkdir() error");
 						strcpy(str, "Failed to create the directory: ");
 						strcat(str, cargs);
@@ -288,15 +302,14 @@ void *Echo (void *threadargs){
 					strcpy(str, "PWD error: must have no arguments\n");
 				}
 				else{
-					if (getcwd(str, sizeof(str)) == NULL){
+					if (strcpy(str, cwd) == NULL){
 						perror("pwd error");
 						strcpy(str, "pwd failed\n");
 					}
 					else{
 						printf("CWD is: %s\n", str);
 					}
-				}
-				
+				}	
 			} //pwd request
 			
 			else if ( strcmp(command, "quit")==0 ){
@@ -321,8 +334,9 @@ void *Echo (void *threadargs){
 				perror("write\n");
 				exit(-7);
 			} //if (wCheck<0)
-		} //else
+		} //else	
 	} //while(strcmp(str, "exit")!=0)
+	
 	if (chdir(homeDir)!=0){
 		perror("Couldn't return to home directory upon closing client");
 	}

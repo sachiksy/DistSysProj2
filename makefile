@@ -1,5 +1,5 @@
 prog: ftpclient.cpp ftpserver.cpp
-	g++ ftpserver.cpp -Wall -lpthread -o myftpserver
+	g++ -std=c++0x ftpserver.cpp -Wall -pthread -o myftpserver
 	g++ ftpclient.cpp -Wall -o myftp
 	
 ser:
