@@ -26,11 +26,14 @@ struct thread_data{
 char homeDir[BUFFER];
 std::unordered_map<std::string, int> months;//hashmap test
 
-//DirectoryShit not fixed
-void get_file(char* filename, int sockid){
+void get_file(char* filename, char* cwd, int sockid){
 	//open file and send file status to client
 	char *status = "NULL";
-	FILE* doc = fopen(filename, "rb");
+	char path[1024];
+	strcpy(path, cwd);
+	strcat(path, "/");
+	strcat(path, filename);
+	FILE* doc = fopen(path, "rb"); //replaced filename with path
 	
 	//file DOES NOT exist, send file status, end function
 	if (doc == NULL) {
@@ -103,8 +106,7 @@ void get_file(char* filename, int sockid){
 	} //else
 } //void get_file(char* filename, int sockid)
 
-//DirectoryShit not fixed
-void put_file(char* filename, int sockid){
+void put_file(char* filename, char* cwd, int sockid){
 	char buf[BUFFER];
 	memset(buf, '\0', BUFFER);
 	
@@ -125,8 +127,13 @@ void put_file(char* filename, int sockid){
 		size_t size;
 		char data[BUFFER];
 		memset(data, '\0', BUFFER);
+		
+		char path[1024];
+		strcpy(path, cwd);
+		strcat(path, "/");
+		strcat(path, filename);
 		//will open no matter what, file is open for writing/receiving
-		FILE* doc = fopen(filename, "wb");
+		FILE* doc = fopen(path, "wb"); //filename replaced with path
 		
 		//send GOOD TO GO, let's start sending that file client
 		//	this has more to do with BLOCKing the client so that the server can start
@@ -195,11 +202,11 @@ void *Echo (void *threadargs){
 		
 		//Switch for the 7 main commands (not including exit). Else is echo
 		if(strcmp(command, "get")==0) {
-			get_file(cargs, sid);
+			get_file(cargs, cwd, sid);
 			
 		} //get <filename> request
 		else if (strcmp(command, "put") == 0) {
-			put_file(cargs, sid);
+			put_file(cargs, cwd, sid);
 			
 		} //put <filename> request
 		else {
@@ -273,7 +280,6 @@ void *Echo (void *threadargs){
 				}
 				
 			} //cd request
-			//DirectoryShit not fixed
 			else if(strcmp(command, "mkdir")==0 ){
 				char path[1024];
 				strcpy(path, cwd);
