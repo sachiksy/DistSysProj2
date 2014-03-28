@@ -95,10 +95,8 @@ void put_file(char* fname, int client_id) {
 
 int main(int argc, char *argv[]){
 	int sock, i;
-	//struct sockaddr_in saddr;
 	struct addrinfo hints, *results, *j;
 	char buf[BUFFER];
-	//struct in_addr inp;
 
 	//check for proper command args
 	if (argc!=3){
@@ -154,9 +152,11 @@ int main(int argc, char *argv[]){
 		
 		//tokenize for STRCMP for GET and PUT, don't want a false positive from STRSTR
 		//	also allows more detailed error messages regarding specific files
+		
 		char *moby=(char *) malloc(BUFFER);
 		char *dick=(char *) malloc(BUFFER);
 		bool extraArgs=false;
+		bool amperSand=false;
 		strcpy(moby, buf);
 		moby = strtok (moby," ");
 		if (moby != NULL){
@@ -165,11 +165,60 @@ int main(int argc, char *argv[]){
 		if (strtok(NULL, " \n")!=NULL){
 			extraArgs=true;
 		}
-
+		//check for ampersand, assuming no funny business as per PointsToNote(3) on proj specs
+		for(int bing = 0; bing < strlen(buf); bing++) {
+			if (buf[bing] == '&') {
+				amperSand = true;
+			}
+		}
+		
 		// RECV/SEND for command: GET
 		if (strcmp(moby, "get") == 0) {
-			if(extraArgs){
+			if (amperSand) {
+				char whale[BUFFER];
+			
+				//send get <filename> <&> to server
+				i=write(sock, buf, strlen(buf));
+				if (i<0){
+					perror("ERROR: Failed to write command to server.\n");
+					close(sock);
+					exit(EXIT_FAILURE);
+				}
+				
+				//recv command ID and print to screen so client knows it
+				if (recv(sock, whale, sizeof(whale), 0) < 0) {
+					perror("ERROR: Problems receiving Command ID from server.\n");
+					close(sock);
+					exit(EXIT_FAILURE);
+				}
+				printf("Command ID is: %s\n", whale);
+				
+				//proceed with GET as normal
+				int sizeofile = 0;
+				char msg[BUFFER];
+				FILE *file = fopen(dick, "w");
+
+				while(sizeofile = recv(sock, msg, BUFFER, 0)) {
+					//file does not exist
+					if ((strcmp(msg, eof)) == 0) {
+						printf("File does not exist in client:%d's directory\n", sock);
+						//delete empty file
+						remove(dick);
+						break;
+					}
+
+					//file exists
+					fwrite(msg, sizeof(char), sizeofile, file);
+					if (sizeofile <= BUFFER) {
+						//client is done receiving
+						break;
+					}
+				}
+				fclose(file);
+			}
+			else if(extraArgs){
 				printf("GET error: must have exactly one argument\n");
+				printf("GET error: or must have exactly two arguments: <argument> <&>\n");
 			} //if (extraArgs)
 			else{
 				//send get <filename> to server
@@ -248,8 +297,48 @@ int main(int argc, char *argv[]){
 
 		} //if (strstr(buf, "get"))
 		else if (strcmp(moby, "put") == 0) {
-			if(extraArgs){
+			if (amperSand) {
+				char whale[BUFFER];
+
+				//send put <filename> <&> to server
+				i=write(sock, buf, strlen(buf));
+				if (i<0){
+					perror("ERROR: Failed to write command to server.\n");
+					close(sock);
+					exit(EXIT_FAILURE);
+				}
+
+				//recv command ID and print to screen so client knows it
+				if (recv(sock, whale, sizeof(whale), 0) < 0) {
+					perror("ERROR: Problems receiving Command ID from server.\n");
+					close(sock);
+					exit(EXIT_FAILURE);
+				}
+				printf("Command ID is: %s\n", whale);
+				
+				//proceed with PUT as normal
+				int sizeofile = 0;
+				char msg[BUFFER];
+				FILE *file = fopen(dick, "r");
+				
+				if (file == NULL) {
+					printf("%s does not exist in local directory\n", dick);
+					send(sock, eof, sizeof(eof), 0);
+				}
+				else {
+					while(sizeofile = fread(msg, sizeof(char), BUFFER, file)) {
+						send(sock, msg, sizeofile, 0);
+						memset(msg, '\0', BUFFER);
+						if (sizeofile == 0) {
+							break;
+						}
+					}
+					fclose(file);
+				}
+			}
+			else if(extraArgs){
 				printf("PUT error: must have exactly one argument\n");
+				printf("PUT error: or must have exactly two arguments: <argument> <&>\n");
 			} //if (extraArgs)
 			else{
 				//send put <filename> to server
