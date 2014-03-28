@@ -13,6 +13,7 @@
 #include <netdb.h>
 #include <arpa/inet.h>		//needed for creating Internet addresses
 #include <unordered_map> 	//needed for hashmap
+#include <sstream>
 
 #define BUFFER 1024
 
@@ -20,7 +21,13 @@ const char eof[] = "EOF";
 
 struct thread_data{
 	int sid;
-	//char *string;
+};
+
+//ampersand thread data
+struct data_thread {
+	int sockid;
+	char* nameofile;
+	char* pathname;
 };
 
 char homeDir[BUFFER];
@@ -33,7 +40,7 @@ void get_file(char* filename, char* cwd, int sockid){
 	strcpy(path, cwd);
 	strcat(path, "/");
 	strcat(path, filename);
-	FILE* doc = fopen(path, "rb"); //replaced filename with path
+	FILE* doc = fopen(path, "rb");
 	
 	//file DOES NOT exist, send file status, end function
 	if (doc == NULL) {
@@ -127,13 +134,13 @@ void put_file(char* filename, char* cwd, int sockid){
 		size_t size;
 		char data[BUFFER];
 		memset(data, '\0', BUFFER);
-		
+
 		char path[1024];
 		strcpy(path, cwd);
 		strcat(path, "/");
 		strcat(path, filename);
 		//will open no matter what, file is open for writing/receiving
-		FILE* doc = fopen(path, "wb"); //filename replaced with path
+		FILE* doc = fopen(path, "wb");
 		
 		//send GOOD TO GO, let's start sending that file client
 		//	this has more to do with BLOCKing the client so that the server can start
@@ -169,6 +176,97 @@ void put_file(char* filename, char* cwd, int sockid){
 	}
 }
 
+//threaded get
+void *get (void *threadinfo){
+	struct data_thread *dt = (struct data_thread*) threadinfo;
+	int sockid = dt->sockid;
+	char* filename = dt->nameofile;
+	char* path = dt->pathname;
+	
+//	printf("filename: %s & sockid: %d\n", filename, sockid);
+//	printf("thread is %u\n", pthread_self());
+//	printf("pathname: %s\n", path);
+	
+	std::ostringstream oss;
+	unsigned int yarn = pthread_self();
+	oss << yarn;
+	char whale[BUFFER];
+	strcpy(whale, oss.str().c_str());
+	
+	//send command ID
+	if (send(sockid, whale, sizeof(whale), 0) < 0) {
+		perror("ERROR: Problems sending Command ID\n");
+		pthread_exit(NULL);
+	}
+	
+	//proceed with GET as normal
+	int sizeofile = 0;
+	char msg[BUFFER];
+	FILE *file = fopen(path, "r");
+	
+	if (file == NULL) {
+		printf("%s does not exist in remote/server's directory\n", filename);
+		send(sockid, eof, sizeof(eof), 0);
+	}
+	else {
+		while(sizeofile = fread(msg, sizeof(char), BUFFER, file)) {
+			send(sockid, msg, sizeofile, 0);
+			memset(msg, '\0', BUFFER);
+			if (sizeofile == 0) {
+				break;
+			}
+		}
+		fclose(file);
+	}
+}
+
+//threaded put
+void *put (void *threadinfo) {
+	struct data_thread *dt = (struct data_thread*) threadinfo;
+	int sockid = dt->sockid;
+	char* filename = dt->nameofile;
+	char* path = dt->pathname;
+	
+//	printf("filename: %s & sockid: %d\n", filename, sockid);
+//	printf("thread is %u\n", pthread_self());
+//	printf("pathname: %s\n", path);
+
+	std::ostringstream oss;
+	unsigned int yarn = pthread_self();
+	oss << yarn;
+	char whale[BUFFER];
+	strcpy(whale, oss.str().c_str());
+	
+	//send command ID
+	if (send(sockid, whale, sizeof(whale), 0) < 0) {
+		perror("ERROR: Problems sending Command ID\n");
+		pthread_exit(NULL);
+	}
+	
+	//proceed with PUT as normal
+	int sizeofile = 0;
+	char msg[BUFFER];
+	FILE *file = fopen(path, "w");
+	
+	while(sizeofile = recv(sockid, msg, BUFFER, 0)) {
+		//file does not exist
+		if ((strcmp(msg, eof)) == 0) {
+			printf("File does not exist in client:%d's directory\n", sockid);
+			//delete empty file
+			remove(path);
+			break;
+		}
+
+		//file exists
+		fwrite(msg, sizeof(char), sizeofile, file);
+		if (sizeofile <= BUFFER) {
+			//server is done receiving
+			break;
+		}
+	}
+	fclose(file);
+}
+
 //Prints the message from the clients and writes the same message back to the client
 void *Echo (void *threadargs){
 	int wCheck;
@@ -190,6 +288,7 @@ void *Echo (void *threadargs){
 		char *command=(char *) malloc(BUFFER);
 		char *cargs=(char *) malloc(BUFFER);
 		bool extraArgs=false;
+		bool amperSand=false;
 		strcpy(command, str);
 		command = strtok (command," ");
 		if (command != NULL){
@@ -198,16 +297,66 @@ void *Echo (void *threadargs){
 		if (strtok(NULL, " \n")!=NULL){
 			extraArgs=true;
 		}
+		//check for ampersand, assuming no funny business as per PointsToNote(3) on proj specs
+		for(int bing = 0; bing < strlen(str); bing++) {
+			if (str[bing] == '&') {
+				amperSand = true;
+			}
+		}
 		
 		
 		//Switch for the 7 main commands (not including exit). Else is echo
 		if(strcmp(command, "get")==0) {
-			get_file(cargs, cwd, sid);
+			if (!amperSand) {
+				get_file(cargs, cwd, sid);
+			}
+			else {
+				char path[1024];
+				strcpy(path, cwd);
+				strcat(path, "/");
+				strcat(path, cargs);
 			
+				//create <GET &> thread, thread data struct
+				pthread_t thread_ID;
+				struct data_thread *dt = (data_thread*)malloc(sizeof(data_thread));
+
+				//initialize <GET &> thread data
+				dt->sockid = sid;
+				dt->nameofile = cargs;
+				dt->pathname = path;
+
+				//initialize and start <PUT &> thread
+				pthread_create(&thread_ID, NULL, get, (void *)dt);
+				
+				//wait for thread to finish and then terminate it
+				(void) pthread_join(thread_ID, NULL);
+			}
 		} //get <filename> request
 		else if (strcmp(command, "put") == 0) {
-			put_file(cargs, cwd, sid);
-			
+			if (!amperSand) {
+				put_file(cargs, cwd, sid);
+			}
+			else {
+				char path[1024];
+				strcpy(path, cwd);
+				strcat(path, "/");
+				strcat(path, cargs);
+				
+				//create <PUT &> thread, thread data struct
+				pthread_t thread_ID;
+				struct data_thread *dt = (data_thread*)malloc(sizeof(data_thread));
+
+				//initialize <PUT &> thread data
+				dt->sockid = sid;
+				dt->nameofile = cargs;
+				dt->pathname = path;
+
+				//initialize and start <PUT &> thread
+				pthread_create(&thread_ID, NULL, put, (void *)dt);
+				
+				//wait for thread to finish and then terminate it
+				(void) pthread_join(thread_ID, NULL);
+			}
 		} //put <filename> request
 		else {
 			if(strcmp(command, "delete")==0){
@@ -346,6 +495,9 @@ void *Echo (void *threadargs){
 	if (chdir(homeDir)!=0){
 		perror("Couldn't return to home directory upon closing client");
 	}
+	
+	close(sid);
+
 	return NULL;
 }
 
