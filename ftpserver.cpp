@@ -39,14 +39,12 @@ struct data_thread {
 
 struct gate_keeper {
 	int readerCount;
-	char writeTest[1024];
 	pthread_mutex_t readMutex;
 	pthread_mutex_t dataMutex;
 	gate_keeper(){
 		readerCount=0;
 		pthread_mutex_init(&(readMutex), NULL);
 		pthread_mutex_init(&(dataMutex), NULL);
-		strcpy(writeTest, "untouched");
 	}
 };
 
@@ -145,10 +143,10 @@ void get_file(char* filename, char* cwd, int sockid){
 	}			
 	lock_reader(&fileLocks[path]);
 	
-	FILE* doc = fopen(path, "rb");
+	FILE* doc = fopen(path, "rbx"); //the x makes fopen fail if file DNE
 	
 	//file DOES NOT exist, send file status, end function
-	if (doc == NULL) {
+	if (!doc || filename == NULL) {
 		printf("%s does NOT exist\n", filename);
 		if (send(sockid, status, (int)strlen(status), 0) < 0){
 			perror("ERROR: Failed to send file status to client.\n");
