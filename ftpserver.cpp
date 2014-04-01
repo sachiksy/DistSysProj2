@@ -14,13 +14,20 @@
 #include <arpa/inet.h>		//needed for creating Internet addresses
 #include <unordered_map> 	//needed for hashmap
 #include <sstream>
+#include <map>
+#include <list>
+#include <algorithm>
+
+using namespace std;
 
 #define BUFFER 1024
 
 const char eof[] = "EOF";
 
+//client thread data
 struct thread_data{
 	int sid;
+	int termid;
 };
 
 //ampersand thread data
@@ -44,7 +51,10 @@ struct gate_keeper {
 };
 
 char homeDir[BUFFER];
-std::unordered_map<std::string, gate_keeper> fileLocks;
+unordered_map<std::string, gate_keeper> fileLocks;
+typedef multimap<char*, bool> innerMap;		//server keeps track of command_ID and termination_status pairs
+multimap<int, innerMap> outerMap;			//server keeps track of client_ID < command_ID, termination_status > > pairs
+list<int> portList;							//list of ports in use or already used
 
 void lock_reader(gate_keeper *mutexGuard){
 	pthread_mutex_lock(&(mutexGuard->readMutex));
@@ -70,6 +80,54 @@ void lock_writer(gate_keeper *mutexGuard){
 
 void unlock_writer(gate_keeper *mutexGuard){
 	pthread_mutex_unlock(&(mutexGuard->dataMutex));
+}
+
+//Make and return socket file descriptor
+int make_sock(const char* port) {
+	int sockid, reuse;
+	struct addrinfo hints, *results;
+	
+	memset(&hints, 0, sizeof(struct addrinfo));
+	hints.ai_family = AF_INET;				//IPv4
+	hints.ai_socktype = SOCK_STREAM;		//TCP
+	hints.ai_flags = AI_PASSIVE;			//use current IP
+	
+	if (getaddrinfo(NULL, port, &hints, &results) < 0) {
+		perror("Cannot resolve the address00\n");
+		exit(EXIT_FAILURE);
+	}
+	
+	//create socket file descriptor
+	sockid = socket(results->ai_family, results->ai_socktype, results->ai_protocol);
+	
+	//check for socket creation failure
+	if (sockid < 0) {
+		perror("Cannot open socket\n");
+		exit(EXIT_FAILURE);
+	}
+	
+	//port reuse
+	reuse = 1;
+	if (setsockopt(sockid, SOL_SOCKET, SO_REUSEADDR, (char *)&reuse, sizeof(int)) < 0) {
+		perror("Cannot set reuse option for socket\n");
+		exit(EXIT_FAILURE);
+	}
+	
+	//bind socket to given port
+	if (bind(sockid, results->ai_addr, results->ai_addrlen) < 0) {
+		perror("Cannot bind socket to given port\n");
+		close(sockid);
+		exit(EXIT_FAILURE);
+	}
+	
+	//listen (queue of 5) for incoming connections
+	if (listen(sockid, 5) < 0) {
+		perror("Cannot listen to socket\n");
+		close(sockid);
+		exit(EXIT_FAILURE);
+	}
+	
+	return sockid;
 }
 
 void get_file(char* filename, char* cwd, int sockid){
@@ -242,7 +300,7 @@ void put_file(char* filename, char* cwd, int sockid){
 	}
 }
 
-//threaded get
+//threaded background get
 void *get (void *threadinfo){
 	struct data_thread *dt = (struct data_thread*) threadinfo;
 	int sockid = dt->sockid;
@@ -252,15 +310,82 @@ void *get (void *threadinfo){
 //	printf("filename: %s & sockid: %d\n", filename, sockid);
 //	printf("thread is %u\n", pthread_self());
 //	printf("pathname: %s\n", path);
+
+	int imPort = 1025;		//randomly chosen for success
+	list<int>::iterator list_it;
 	
-	std::ostringstream oss;
+	//get a valid port number
+	while(true){
+		//if found returns value, else returns last value (end(portList))
+		list_it = find(portList.begin(), portList.end(), imPort);
+		
+		//value not equal end of list, portList contains imPort, increment and keep looking for valid port
+		if (list_it != portList.end()) {
+			imPort = imPort + 1;
+			
+			//valid port numbers are between 1024 and 65535, if not valid port number, reset
+			if (imPort > 65535) {
+				imPort = 1025;	//doesn't matter b/c this crashes for some reason REVISIT
+			}
+		}
+		//end of list equals end of list, value not in portList, we have valid port number
+		else {
+			//add it to portList
+			portList.push_back(imPort);
+			break;
+		}
+	}
+	ostringstream porto;
+	porto << imPort;
+	char whale[BUFFER];
+	memset(whale, '\0', sizeof(whale));
+	strcpy(whale, porto.str().c_str());
+	
+	//get ready to loop accept
+	int dataCon;
+	struct sockaddr_in cargo;
+	unsigned int cult = sizeof(cargo);
+	int seal = make_sock(whale);
+	
+	//send port of data connection
+	if (send(sockid, whale, sizeof(whale), 0) < 0) {
+		perror("ERROR: Problems sending Command ID\n");
+		pthread_exit(NULL);
+	}
+	
+	//wait for data connection from client
+	while(true) {
+		if ((dataCon = accept(seal, (struct sockaddr *) &cargo, &cult)) > 0) {
+			break;
+		}
+	}
+	
+	ostringstream oss;
 	unsigned int yarn = pthread_self();
 	oss << yarn;
-	char whale[BUFFER];
+	memset(whale, '\0', sizeof(whale));
 	strcpy(whale, oss.str().c_str());
+
+	printf("Command ID: %u\n", yarn);
 	
-	//send command ID
-	if (send(sockid, whale, sizeof(whale), 0) < 0) {
+	multimap<int, innerMap>::iterator it;
+	//first insert client_id element into outerMap
+	it = outerMap.insert(make_pair (sockid, innerMap()));
+	//then insert command_id and termination_status into innerMap
+	it->second.insert(make_pair (whale, false));
+	
+	multimap<char*, bool>::iterator in_it;
+	
+	for (it = outerMap.begin(); it != outerMap.end(); it++) {
+		printf("new element: %d\n", it->first);
+		for (in_it = it->second.begin(); in_it != it->second.end(); in_it++) {
+			printf("%s =>", in_it->first);
+			printf(in_it->second ? " true\n" : " false\n");
+		}
+	}
+	
+	//send command ID over data connection
+	if (send(dataCon, whale, sizeof(whale), 0) < 0) {
 		perror("ERROR: Problems sending Command ID\n");
 		pthread_exit(NULL);
 	}
@@ -277,25 +402,27 @@ void *get (void *threadinfo){
 	char msg[BUFFER];
 	FILE *file = fopen(path, "r");
 	
+	//send file nonexistence over data connection
 	if (file == NULL) {
 		printf("%s does not exist in remote/server's directory\n", filename);
-		send(sockid, eof, sizeof(eof), 0);
+		send(dataCon, eof, sizeof(eof), 0);
 		unlock_reader(&fileLocks[path]);
 	}
+	//send file over data connection
 	else {
-		while(sizeofile = fread(msg, sizeof(char), BUFFER, file)) {
-			send(sockid, msg, sizeofile, 0);
+		while(sizeofile = (fread(msg, sizeof(char), BUFFER, file))) {
+			send(dataCon, msg, sizeofile, 0);
 			memset(msg, '\0', BUFFER);
-			if (sizeofile == 0) {
-				break;
-			}
 		}
+		close(dataCon);
 		fclose(file);
 		unlock_reader(&fileLocks[path]);
+		
+		//delete successful commandID from multimap
 	}
 }
 
-//threaded put
+//threaded background put
 void *put (void *threadinfo) {
 	struct data_thread *dt = (struct data_thread*) threadinfo;
 	int sockid = dt->sockid;
@@ -306,14 +433,81 @@ void *put (void *threadinfo) {
 //	printf("thread is %u\n", pthread_self());
 //	printf("pathname: %s\n", path);
 
-	std::ostringstream oss;
+	int imPort = 1025;		//randomly chosen for success
+	list<int>::iterator list_it;
+	
+	//get a valid port number
+	while(true){
+		//if found returns value, else returns last value (end(portList))
+		list_it = find(portList.begin(), portList.end(), imPort);
+		
+		//value not equal end of list, portList contains imPort, increment and keep looking for valid port
+		if (list_it != portList.end()) {
+			imPort = imPort + 1;
+			
+			//valid port numbers are between 1024 and 65535, if not valid port number, reset
+			if (imPort > 65535) {
+				imPort = 1025;	//doesn't matter b/c this crashes for some reason REVISIT
+			}
+		}
+		//end of list equals end of list, value not in portList, we have valid port number
+		else {
+			//add it to portList
+			portList.push_back(imPort);
+			break;
+		}
+	}
+	ostringstream porto;
+	porto << imPort;
+	char whale[BUFFER];
+	memset(whale, '\0', sizeof(whale));
+	strcpy(whale, porto.str().c_str());
+	
+	//get ready to loop accept
+	int dataCon;
+	struct sockaddr_in cargo;
+	unsigned int cult = sizeof(cargo);
+	int seal = make_sock(whale);
+	
+	//send port of data connection
+	if (send(sockid, whale, sizeof(whale), 0) < 0) {
+		perror("ERROR: Problems sending Command ID\n");
+		pthread_exit(NULL);
+	}
+	
+	//wait for data connection from client
+	while(true) {
+		if ((dataCon = accept(seal, (struct sockaddr *) &cargo, &cult)) > 0) {
+			break;
+		}
+	}
+
+	ostringstream oss;
 	unsigned int yarn = pthread_self();
 	oss << yarn;
-	char whale[BUFFER];
+	memset(whale, '\0', sizeof(whale));
 	strcpy(whale, oss.str().c_str());
 	
+	printf("Command ID: %u\n", yarn);	//tk
+	
+	multimap<int, innerMap>::iterator it;
+	//first insert client_id element into outerMap
+	it = outerMap.insert(make_pair (sockid, innerMap()));
+	//then insert command_id and termination_status into innerMap
+	it->second.insert(make_pair (whale, false));
+	
+	multimap<char*, bool>::iterator in_it;
+	
+	for (it = outerMap.begin(); it != outerMap.end(); it++) {
+		printf("new element: %d\n", it->first);
+		for (in_it = it->second.begin(); in_it != it->second.end(); in_it++) {
+			printf("%s =>", in_it->first);
+			printf(in_it->second ? " true\n" : " false\n");
+		}
+	}
+	
 	//send command ID
-	if (send(sockid, whale, sizeof(whale), 0) < 0) {
+	if (send(dataCon, whale, sizeof(whale), 0) < 0) {
 		perror("ERROR: Problems sending Command ID\n");
 		pthread_exit(NULL);
 	}
@@ -330,8 +524,9 @@ void *put (void *threadinfo) {
 	lock_writer(&fileLocks[path]);
 	
 	FILE *file = fopen(path, "w");
+	bool breakout = false;
 	
-	while(sizeofile = recv(sockid, msg, BUFFER, 0)) {
+	while(sizeofile = recv(dataCon, msg, BUFFER, 0)) {
 		//file does not exist
 		if ((strcmp(msg, eof)) == 0) {
 			printf("File does not exist in client:%d's directory\n", sockid);
@@ -342,23 +537,66 @@ void *put (void *threadinfo) {
 
 		//file exists
 		fwrite(msg, sizeof(char), sizeofile, file);
-		if (sizeofile <= BUFFER) {
-			//server is done receiving
+		
+		for (it = outerMap.begin(); it != outerMap.end(); it++) {
+			if(it->first == sockid) {
+				for (in_it = it->second.begin(); in_it != it->second.end(); in_it++) {
+					if (in_it->first == whale) {
+						//terminate status is ON
+						if (in_it->second == 1) {
+							//delete file
+							remove(path);
+							breakout = true;
+							printf("Terminating...\n");	//tk
+						}
+					}
+				}
+			}
+		}
+		if (breakout) {
+			printf("Termination COMPLETE\n");	//tk
 			break;
 		}
 	}
+	close(dataCon);
 	fclose(file);
 	unlock_writer(&fileLocks[path]);
+	
+	//delete successful commandID from map(vector)
+}
+
+//flip terminate status to true when cmdID matches in multimap
+void terminate(char* cmdID, int clientID){
+	bool exist = false;
+	multimap<int, innerMap>::iterator it;
+	multimap<char*, bool>::iterator in_it;
+	
+	for (it = outerMap.begin(); it != outerMap.end(); it++) {
+		//clientID/sockID match, search inner map
+		if(it->first == clientID) {
+			for (in_it = it->second.begin(); in_it != it->second.end(); in_it++) {
+				//commandID match, flip termination status to true
+				if(in_it->first == cmdID) {
+					in_it->second = true;
+					exist = true;
+				}
+			}
+		}
+	}
+	if (!exist) {
+		printf("Command ID invalid\n");
+	}
 }
 
 //Prints the message from the clients and writes the same message back to the client
 void *Echo (void *threadargs){
 	int wCheck;
-	struct thread_data *data;
-	data=(struct thread_data *) threadargs;
-	int sid=data->sid;
+	struct thread_data *data = (struct thread_data *) threadargs;
+	int sid = data->sid;
+	int tid = data->termid;
 	char str[BUFFER];
 	char cwd[BUFFER];
+	
 	strcpy(cwd, homeDir);
 	
 	while(strcmp(str, "quit")!=0){
@@ -429,12 +667,12 @@ void *Echo (void *threadargs){
 				//create <PUT &> thread, thread data struct
 				pthread_t thread_ID;
 				struct data_thread *dt = (data_thread*)malloc(sizeof(data_thread));
-
+				
 				//initialize <PUT &> thread data
 				dt->sockid = sid;
 				dt->nameofile = cargs;
 				dt->pathname = path;
-
+				
 				//initialize and start <PUT &> thread
 				pthread_create(&thread_ID, NULL, put, (void *)dt);
 				
@@ -442,6 +680,14 @@ void *Echo (void *threadargs){
 				(void) pthread_join(thread_ID, NULL);
 			}
 		} //put <filename> request
+		else if(strcmp(command, "terminate") == 0) {
+			if (isdigit(cargs[0])) {
+				terminate(cargs, sid);
+			}
+			else {
+				printf("Terminate requires a sequence of numbers\n");
+			}
+		}
 		else {
 			if(strcmp(command, "delete")==0){
 				if (cargs==NULL || extraArgs){
@@ -549,8 +795,28 @@ void *Echo (void *threadargs){
 						printf("CWD is: %s\n", str);
 					}
 				}	
-			} //pwd request
-			
+			} //pwd request		
+			else if (strcmp(command, "what") ==0) {
+				printf("Contents of List\n\n");
+				list<int>::iterator master;
+				for(master = portList.begin(); master != portList.end(); ++master) {
+					printf("%d\n", *master);
+				}
+				
+				/*printf("Contents of MultiMap\n\n");
+				
+				multimap<int, innerMap>::iterator it;
+				multimap<char*, bool>::iterator in_it;
+				
+				for (it = outerMap.begin(); it != outerMap.end(); ++it) {
+					printf("%d\n", it->first);
+					for (in_it = it->second.begin(); in_it != it->second.end(); ++in_it) {
+						printf("%s =>", in_it->first);
+						printf(in_it->second ? " true\n" : " false\n");
+					}
+				}*/
+				strcpy(str, cargs);
+			}
 			else if ( strcmp(command, "quit")==0 ){
 				if (cargs!=NULL){
 					printf("QUIT: command must have no arguments\n");
@@ -561,7 +827,8 @@ void *Echo (void *threadargs){
 				}
 				
 			} //quit request
-			/*
+			
+/*
 			else if( strcmp(command, "read")==0 ){
 				printf("Thread # %d trying to get read lock\n", pthread_self());
 				
@@ -614,6 +881,8 @@ void *Echo (void *threadargs){
 	}
 	
 	close(sid);
+	close(tid);
+	//(void) pthread_join(nator, NULL);
 
 	return NULL;
 }
@@ -622,88 +891,65 @@ int main(int argc, char *argv[]){
 
 	//kills zombie children
 	signal(SIGCHLD, SIG_IGN);
-
-	struct addrinfo hints, *results;
-	int sockid, client, reuse;
-	int numThreads=2;
-	pthread_t threads[numThreads];
-	struct thread_data data_arr[numThreads];
 	
 	//checks for command-line params
-	if(argc!=2){
-		printf("Usage: %s <port number>\n", argv[0]);
+	if(argc != 3){
+		printf("Usage: %s <nport number> <tport number>\n", argv[0]);
 		exit(EXIT_FAILURE);
 	}
 	
-	memset(&hints, 0, sizeof(struct addrinfo));
-	hints.ai_family = AF_INET;				//IPv4
-	hints.ai_socktype = SOCK_STREAM;		//TCP
-	hints.ai_flags = AI_PASSIVE;			//use current IP
-	
-	if (getaddrinfo(NULL, argv[1], &hints, &results) < 0) {
-		perror("Cannot resolve the address\n");
+	//check that N-Port and T-Port are not the same
+	if (argv[1] == argv[2]) {
+		printf("N-Port: %s and T-Port: %s cannot be equal", argv[1], argv[2]);
 		exit(EXIT_FAILURE);
 	}
 	
-	//create socket file descriptor
-	sockid = socket(results->ai_family, results->ai_socktype, results->ai_protocol);
-	
-	//check for socket creation failure
-	if (sockid < 0) {
-		perror("Cannot open socket\n");
-		exit(EXIT_FAILURE);
-	}
-	
-	printf("got a socket number: %d\n", sockid);
-	
-	//port reuse
-	reuse = 1;
-	if (setsockopt(sockid, SOL_SOCKET, SO_REUSEADDR, (char *)&reuse, sizeof(int)) < 0) {
-		perror("Cannot set reuse option for socket\n");
-		exit(EXIT_FAILURE);
-	}
-	
-	//bind socket to given port
-	if (bind(sockid, results->ai_addr, results->ai_addrlen) < 0) {
-		perror("Cannot bind socket to given port\n");
-		close(sockid);
-		exit(EXIT_FAILURE);
-	}
+	//add port numbers to list of disallowed port numbers
+	int portN = atoi(argv[1]);
+	int portT = atoi(argv[2]);
+	portList.push_back(portN);
+	portList.push_back(portT);
 	
 	//initialize home directory
 	if (getcwd(homeDir, sizeof(homeDir)) == NULL){
 		perror("Home Directory init error");
 	}
 	
-	//listen (queue of 5) for incoming connections
-	if (listen(sockid, 5) < 0) {
-		perror("Cannot listen to socket\n");
-		close(sockid);
-		exit(EXIT_FAILURE);
-	}
+	//Cannot make single TCP socket listen to multiple ports
+	//	so created 2 threads/2 sockets to listen to 2 ports
+	int nSock = make_sock(argv[1]);
+	int tSock = make_sock(argv[2]);
+	//pthread_t nsockThread, tsockThread;	//REVISIT
 	
 	//Accepts a client and calls the echo function
-	int m;
+	int m, client, terminator; //tk
+	int numThreads = 5;
+	pthread_t threads[numThreads];
+	struct thread_data data_arr[numThreads];
 	//store details about the client who has connected
 	struct sockaddr_in saddr;
 	unsigned int addrlen = sizeof(saddr);
 	while (1){
 		//accept and create a separate socket for client(s)
-		//printf("trying to connect\n");
-		if ((client=accept(sockid, (struct sockaddr *) &saddr, &addrlen)) < 0) {
+		if ((client = accept(nSock, (struct sockaddr *) &saddr, &addrlen)) < 0) {
 			perror("Cannot open client socket\n");
 			exit(EXIT_FAILURE);
 		}
-		//printf("connected\n");
+		printf("Client is connected:%d\n", client);
+
+		if ((terminator = accept(tSock, (struct sockaddr *) &saddr, &addrlen)) < 0) {
+			perror ("Cannot open terminator socket\n");
+			exit(EXIT_FAILURE);
+		}
+		printf("Terminator is connected:%d\n", terminator);
 		
-		data_arr[0].sid=client;
+		data_arr[0].sid = client;
+		data_arr[0].termid = terminator;
+		
 		m = pthread_create(&threads[0], NULL, Echo, (void *) &data_arr[0]);
 		if (m){
 			perror("Pthread");
 			exit(-5);
 		}
-		//printf("Thread quit!\n");
 	}
-	pthread_exit(NULL);
-	exit(0);
 }
