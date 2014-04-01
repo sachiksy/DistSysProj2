@@ -30,8 +30,47 @@ struct data_thread {
 	char* pathname;
 };
 
+struct gate_keeper {
+	int readerCount;
+	char writeTest[1024];
+	pthread_mutex_t readMutex;
+	pthread_mutex_t dataMutex;
+	gate_keeper(){
+		readerCount=0;
+		pthread_mutex_init(&(readMutex), NULL);
+		pthread_mutex_init(&(dataMutex), NULL);
+		strcpy(writeTest, "untouched");
+	}
+};
+
 char homeDir[BUFFER];
-std::unordered_map<std::string, int> months;//hashmap test
+std::unordered_map<std::string, gate_keeper> fileLocks;
+
+void lock_reader(gate_keeper *mutexGuard){
+	pthread_mutex_lock(&(mutexGuard->readMutex));
+	++(mutexGuard->readerCount);
+	if(mutexGuard->readerCount==1){
+		pthread_mutex_lock(&(mutexGuard->dataMutex));
+	}
+	pthread_mutex_unlock(&(mutexGuard->readMutex));
+}
+
+void unlock_reader(gate_keeper *mutexGuard){
+	pthread_mutex_lock(&(mutexGuard->readMutex));
+	--(mutexGuard->readerCount);
+	if(mutexGuard->readerCount==0){
+		pthread_mutex_unlock(&(mutexGuard->dataMutex));
+	}
+	pthread_mutex_unlock(&(mutexGuard->readMutex));
+}
+
+void lock_writer(gate_keeper *mutexGuard){
+	pthread_mutex_lock(&(mutexGuard->dataMutex));
+}
+
+void unlock_writer(gate_keeper *mutexGuard){
+	pthread_mutex_unlock(&(mutexGuard->dataMutex));
+}
 
 void get_file(char* filename, char* cwd, int sockid){
 	//open file and send file status to client
@@ -40,6 +79,14 @@ void get_file(char* filename, char* cwd, int sockid){
 	strcpy(path, cwd);
 	strcat(path, "/");
 	strcat(path, filename);
+	
+	//check if file is in table; get locks for reader
+	if(fileLocks.find(path) == fileLocks.end()){
+		gate_keeper zuul;
+		fileLocks[path]=zuul;
+	}			
+	lock_reader(&fileLocks[path]);
+	
 	FILE* doc = fopen(path, "rb");
 	
 	//file DOES NOT exist, send file status, end function
@@ -48,6 +95,7 @@ void get_file(char* filename, char* cwd, int sockid){
 		if (send(sockid, status, (int)strlen(status), 0) < 0){
 			perror("ERROR: Failed to send file status to client.\n");
 			close(sockid);
+			unlock_reader(&fileLocks[path]);
 			exit(EXIT_FAILURE);
 		} //if (send(sockid, status, (int)strlen(status), 0) < 0)
 		return;
@@ -58,6 +106,7 @@ void get_file(char* filename, char* cwd, int sockid){
 			perror("ERROR: Failed to send file status to client");
 			fclose(doc);
 			close(sockid);
+			unlock_reader(&fileLocks[path]);
 			exit(EXIT_FAILURE);
 		} //if (send(sockid, filename, (int)strlen(filename), 0) < 0)
 		
@@ -67,6 +116,7 @@ void get_file(char* filename, char* cwd, int sockid){
 			perror("ERROR: Failed to receive file opening status from server.\n");
 			fclose(doc);
 			close(sockid);
+			unlock_reader(&fileLocks[path]);
 			exit(EXIT_FAILURE);
 		} //if (recv(sockid, data, sizeof(data), 0) < 0)
 		//client sent failure to open file
@@ -74,6 +124,7 @@ void get_file(char* filename, char* cwd, int sockid){
 			perror("ERROR: Client was not able to open file to be ready for receiving.\n");
 			fclose(doc);
 			close(sockid);
+			unlock_reader(&fileLocks[path]);
 			exit(EXIT_FAILURE);
 		} //if (strstr(data, "CANT"))
 		else{
@@ -87,6 +138,7 @@ void get_file(char* filename, char* cwd, int sockid){
 					perror("ERROR: Cannot fread() file.\n");
 					fclose(doc);
 					close(sockid);
+					unlock_reader(&fileLocks[path]);
 					exit(EXIT_FAILURE);
 				}
 				
@@ -95,6 +147,7 @@ void get_file(char* filename, char* cwd, int sockid){
 					perror("ERROR: Cannot send file.\n");
 					fclose(doc);
 					close(sockid);
+					unlock_reader(&fileLocks[path]);
 					exit(EXIT_FAILURE);
 				}
 			} while (size > 0);
@@ -104,11 +157,13 @@ void get_file(char* filename, char* cwd, int sockid){
 				perror("ERROR: Cannot send 'end of file' signal to client.\n");
 				fclose(doc);
 				close(sockid);
+				unlock_reader(&fileLocks[path]);
 				exit(EXIT_FAILURE);
 			}
 			
 			//close file
 			fclose(doc);
+			unlock_reader(&fileLocks[path]);
 		} //else
 	} //else
 } //void get_file(char* filename, int sockid)
@@ -139,6 +194,14 @@ void put_file(char* filename, char* cwd, int sockid){
 		strcpy(path, cwd);
 		strcat(path, "/");
 		strcat(path, filename);
+		
+		//checks if file already exists in hash; locks for writer
+		if(fileLocks.find(path) == fileLocks.end()){
+			gate_keeper zuul;
+			fileLocks[path]=zuul;
+		}
+		lock_writer(&fileLocks[path]);
+		
 		//will open no matter what, file is open for writing/receiving
 		FILE* doc = fopen(path, "wb");
 		
@@ -149,6 +212,7 @@ void put_file(char* filename, char* cwd, int sockid){
 			perror("ERROR: Cannot send ready to receive clearance to client.\n");
 			fclose(doc);
 			close(sockid);
+			unlock_writer(&fileLocks[path]);
 			exit(EXIT_FAILURE);
 		}
 		
@@ -168,11 +232,13 @@ void put_file(char* filename, char* cwd, int sockid){
 			perror("ERROR: Problems receiving file from client.\n");
 			fclose(doc);
 			close(sockid);
+			unlock_writer(&fileLocks[path]);
 			exit(EXIT_FAILURE);
 		}
 		
 		fclose(doc);
 		printf("%s received from client local directory to server remote directory.\n", filename);
+		unlock_writer(&fileLocks[path]);
 	}
 }
 
@@ -199,6 +265,13 @@ void *get (void *threadinfo){
 		pthread_exit(NULL);
 	}
 	
+	//check if file is in table; get locks for reader
+	if(fileLocks.find(path) == fileLocks.end()){
+		gate_keeper zuul;
+		fileLocks[path]=zuul;
+	}			
+	lock_reader(&fileLocks[path]);
+	
 	//proceed with GET as normal
 	int sizeofile = 0;
 	char msg[BUFFER];
@@ -207,6 +280,7 @@ void *get (void *threadinfo){
 	if (file == NULL) {
 		printf("%s does not exist in remote/server's directory\n", filename);
 		send(sockid, eof, sizeof(eof), 0);
+		unlock_reader(&fileLocks[path]);
 	}
 	else {
 		while(sizeofile = fread(msg, sizeof(char), BUFFER, file)) {
@@ -217,6 +291,7 @@ void *get (void *threadinfo){
 			}
 		}
 		fclose(file);
+		unlock_reader(&fileLocks[path]);
 	}
 }
 
@@ -246,6 +321,14 @@ void *put (void *threadinfo) {
 	//proceed with PUT as normal
 	int sizeofile = 0;
 	char msg[BUFFER];
+	
+	//checks if file already exists in hash; locks for writer
+	if(fileLocks.find(path) == fileLocks.end()){
+		gate_keeper zuul;
+		fileLocks[path]=zuul;
+	}
+	lock_writer(&fileLocks[path]);
+	
 	FILE *file = fopen(path, "w");
 	
 	while(sizeofile = recv(sockid, msg, BUFFER, 0)) {
@@ -265,6 +348,7 @@ void *put (void *threadinfo) {
 		}
 	}
 	fclose(file);
+	unlock_writer(&fileLocks[path]);
 }
 
 //Prints the message from the clients and writes the same message back to the client
@@ -477,6 +561,39 @@ void *Echo (void *threadargs){
 				}
 				
 			} //quit request
+			/*
+			else if( strcmp(command, "read")==0 ){
+				printf("Thread # %d trying to get read lock\n", pthread_self());
+				
+				if(fileLocks.find(cargs) == fileLocks.end()){
+					gate_keeper test;
+					fileLocks[cargs]=test;
+				}
+				
+				lock_reader(&fileLocks[cargs]);
+				printf("Thread # %d read %d\n", pthread_self(), fileLocks[cargs].readerCount);
+				printf("writeTest is %s\n", fileLocks[cargs].writeTest);
+				sleep(30);
+				unlock_reader(&fileLocks[cargs]);
+				printf("Thread # %d released the read lock\n", pthread_self());
+			}
+			
+			else if( strcmp(command, "write")==0 ){
+				printf("Thread # %d trying to get write lock\n", pthread_self());
+				
+				if(fileLocks.find(cargs) == fileLocks.end()){
+					gate_keeper test;
+					fileLocks[cargs]=test;
+				}
+				
+				lock_writer(&fileLocks[cargs]);
+				strcpy(fileLocks[cargs].writeTest, "1");
+				printf("Thread # %d wrote %s\n", pthread_self(), fileLocks[cargs].writeTest);
+				sleep(30);
+				unlock_writer(&fileLocks[cargs]);
+				printf("Thread # %d released the write lock\n", pthread_self());
+			}
+			*/
 			
 			else{
 				printf("Unrecognised command: %s\n", str);
@@ -508,9 +625,9 @@ int main(int argc, char *argv[]){
 
 	struct addrinfo hints, *results;
 	int sockid, client, reuse;
-	int numThreads=2; //tk
-	pthread_t threads[numThreads];//tk
-	struct thread_data data_arr[numThreads];//tk
+	int numThreads=2;
+	pthread_t threads[numThreads];
+	struct thread_data data_arr[numThreads];
 	
 	//checks for command-line params
 	if(argc!=2){
@@ -566,7 +683,7 @@ int main(int argc, char *argv[]){
 	}
 	
 	//Accepts a client and calls the echo function
-	int m; //tk
+	int m;
 	//store details about the client who has connected
 	struct sockaddr_in saddr;
 	unsigned int addrlen = sizeof(saddr);
@@ -587,6 +704,6 @@ int main(int argc, char *argv[]){
 		}
 		//printf("Thread quit!\n");
 	}
-	pthread_exit(NULL); //tk
+	pthread_exit(NULL);
 	exit(0);
 }
