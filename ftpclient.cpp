@@ -10,12 +10,15 @@
 #include <sys/uio.h>
 #include <netdb.h>
 #include <fcntl.h>
+#include <map>
 
 using namespace std;
 
 #define BUFFER 1024
 
 const char eof[] = "EOF";
+
+map<char*, bool> arnold;
 
 void put_file(char* fname, int client_id) {
 	//open file and send file status to server
@@ -93,48 +96,67 @@ void put_file(char* fname, int client_id) {
 	}
 }
 
-int main(int argc, char *argv[]){
-	int sock, i;
-	struct addrinfo hints, *results, *j;
-	char buf[BUFFER];
-
-	//check for proper command args
-	if (argc!=3){
-		printf("Usage: %s <server hostname> <port number>\n", argv[0]);
-		exit(EXIT_FAILURE);
-	}
+//make connection to server given hostname and port number
+int make_connection(const char *host, const char* port) {
+	int sock;
+	struct addrinfo hint, *res, *j;
 	
 	//obtain address(es) matching hostname and port number
-	memset(&hints, 0, sizeof(struct addrinfo));
-	hints.ai_family = AF_INET;			//IPv4
-	hints.ai_socktype = SOCK_STREAM;	//TCP socket
+	memset(&hint, 0, sizeof(struct addrinfo));
+	hint.ai_family = AF_INET;			//IPv4
+	hint.ai_socktype = SOCK_STREAM;	//TCP socket
 	
 	//getaddrinfo(hostname, port number, address specifications, start of linked list of address structs)
-	if (getaddrinfo(argv[1], argv[2], &hints, &results) < 0) {
+	if (getaddrinfo(host, port, &hint, &res) < 0) {
 		perror("ERROR: Cannot resolve the address.\n");
 		exit(EXIT_FAILURE);
 	}
 	
 	//try each address until successful connection
-	for (j = results; j != NULL; j = j->ai_next) {
+	for (j = res; j != NULL; j = j->ai_next) {
 		//if socket creation fail, continue
 		if ((sock = socket(j->ai_family, j->ai_socktype, j->ai_protocol)) < 0) {
 			continue;
 		}
+		
 		//connection success, break
 		if (connect(sock, j->ai_addr, j->ai_addrlen) != -1) {
 			break;
 		}
-		
+
 		close(sock);
 	}
+	
 	//no successful address
 	if (j == NULL) {
 		perror("ERROR: Cannot connect to address.\n");
 		exit(EXIT_FAILURE);
 	}
 	
-	freeaddrinfo(results);
+	freeaddrinfo(res);
+	
+	return sock;
+}
+
+int main(int argc, char *argv[]){
+	int sock, tsock, i, tempo;
+	char buf[BUFFER];
+
+	//check for proper command args
+	if (argc != 4){
+		printf("Usage: %s <server hostname> <nport number> <tport number>\n", argv[0]);
+		exit(EXIT_FAILURE);
+	}
+	
+	//check that N-Port and T-Port are not the same
+	if (argv[2] == argv[3]) {
+		printf("N-Port: %s and T-Port: %s cannot be equal", argv[2], argv[3]);
+		exit(EXIT_FAILURE);
+	}
+
+	sock = make_connection(argv[1], argv[2]);
+	tsock = make_connection(argv[1], argv[3]);
+	printf("sock: %d\ntsock: %d\n", sock, tsock);	//tk
 	
 	//user input handling
 	while(strcmp(buf, "quit") != 0){
@@ -176,6 +198,7 @@ int main(int argc, char *argv[]){
 		if (strcmp(moby, "get") == 0) {
 			if (amperSand) {
 				char whale[BUFFER];
+				memset(whale, '\0', sizeof(whale));
 			
 				//send get <filename> <&> to server
 				i=write(sock, buf, strlen(buf));
@@ -185,10 +208,23 @@ int main(int argc, char *argv[]){
 					exit(EXIT_FAILURE);
 				}
 				
-				//recv command ID and print to screen so client knows it
+				//recv port number for &GET data connection
 				if (recv(sock, whale, sizeof(whale), 0) < 0) {
 					perror("ERROR: Problems receiving Command ID from server.\n");
 					close(sock);
+					exit(EXIT_FAILURE);
+				}
+				printf("Data Connection Port is: %s\n", whale);
+				
+				//connect to data connection
+				int tempo;
+				tempo = make_connection(argv[1], whale);
+				memset(whale, '\0', sizeof(whale));
+				
+				//recv command ID and print to screen so client knows it
+				if (recv(tempo, whale, sizeof(whale), 0) < 0) {
+					perror("ERROR: Problems receiving Command ID from server.\n");
+					close(tempo);
 					exit(EXIT_FAILURE);
 				}
 				printf("Command ID is: %s\n", whale);
@@ -198,10 +234,10 @@ int main(int argc, char *argv[]){
 				char msg[BUFFER];
 				FILE *file = fopen(dick, "w");
 
-				while(sizeofile = recv(sock, msg, BUFFER, 0)) {
+				while(sizeofile = recv(tempo, msg, BUFFER, 0)) {
 					//file does not exist
 					if ((strcmp(msg, eof)) == 0) {
-						printf("File does not exist in client:%d's directory\n", sock);
+						printf("File does not exist in client:%d's directory\n", tempo);
 						//delete empty file
 						remove(dick);
 						break;
@@ -209,11 +245,8 @@ int main(int argc, char *argv[]){
 
 					//file exists
 					fwrite(msg, sizeof(char), sizeofile, file);
-					if (sizeofile <= BUFFER) {
-						//client is done receiving
-						break;
-					}
 				}
+				close(tempo);
 				fclose(file);
 			}
 			else if(extraArgs){
@@ -299,6 +332,7 @@ int main(int argc, char *argv[]){
 		else if (strcmp(moby, "put") == 0) {
 			if (amperSand) {
 				char whale[BUFFER];
+				memset(whale, '\0', sizeof(whale));
 
 				//send put <filename> <&> to server
 				i=write(sock, buf, strlen(buf));
@@ -307,11 +341,24 @@ int main(int argc, char *argv[]){
 					close(sock);
 					exit(EXIT_FAILURE);
 				}
-
-				//recv command ID and print to screen so client knows it
+				
+				//recv port number for &GET data connection
 				if (recv(sock, whale, sizeof(whale), 0) < 0) {
 					perror("ERROR: Problems receiving Command ID from server.\n");
 					close(sock);
+					exit(EXIT_FAILURE);
+				}
+				printf("Data Connection Port is: %s\n", whale);
+				
+				//connect to data connection
+				int tempo;
+				tempo = make_connection(argv[1], whale);
+				memset(whale, '\0', sizeof(whale));
+
+				//recv command ID and print to screen so client knows it
+				if (recv(tempo, whale, sizeof(whale), 0) < 0) {
+					perror("ERROR: Problems receiving Command ID from server.\n");
+					close(tempo);
 					exit(EXIT_FAILURE);
 				}
 				printf("Command ID is: %s\n", whale);
@@ -323,16 +370,14 @@ int main(int argc, char *argv[]){
 				
 				if (file == NULL) {
 					printf("%s does not exist in local directory\n", dick);
-					send(sock, eof, sizeof(eof), 0);
+					send(tempo, eof, sizeof(eof), 0);
 				}
 				else {
 					while(sizeofile = fread(msg, sizeof(char), BUFFER, file)) {
-						send(sock, msg, sizeofile, 0);
+						send(tempo, msg, sizeofile, 0);
 						memset(msg, '\0', BUFFER);
-						if (sizeofile == 0) {
-							break;
-						}
 					}
+					close(tempo);
 					fclose(file);
 				}
 			}
@@ -353,6 +398,21 @@ int main(int argc, char *argv[]){
 			} //else
 
 		}
+		else if (strcmp(moby, "terminate") == 0) {
+			if(extraArgs){
+				printf("TERMINATE error: must have exactly one argument\n");
+			} //if (extraArgs)
+			else{
+				//Send termination order via T-Port
+				i = write(sock, buf, strlen(buf));
+				if (i < 0){
+					perror("ERROR: Failed to write termination to server.\n");
+					close(tsock);
+					close(sock);
+					exit(EXIT_FAILURE);
+				}
+			}
+		}
 		// WRITE/READ for commands: LS, PWD
 		else {
 			i=write(sock, buf, strlen(buf));
@@ -371,6 +431,7 @@ int main(int argc, char *argv[]){
 	} //while(strcmp(buf, "exit")!=0)
 	
 	close(sock);
+	close(tsock);
 
 	exit(0);
 
