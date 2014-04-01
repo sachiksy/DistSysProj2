@@ -129,13 +129,23 @@ int make_sock(const char* port) {
 }
 
 void get_file(char* filename, char* cwd, int sockid){
-	//open file and send file status to client
+	//checks if a filename has been supplied
 	char *status = "NULL";
+	if (filename==NULL){
+		printf("No filename supplied\n");
+		if (send(sockid, status, (int)strlen(status), 0) < 0){
+			perror("ERROR: Failed to send file status to client.\n");
+			close(sockid);
+			exit(EXIT_FAILURE);
+		} //if (send(sockid, status, (int)strlen(status), 0) < 0)
+		return;
+	}
+	
+	//open file and send file status to client
 	char path[1024];
 	strcpy(path, cwd);
 	strcat(path, "/");
 	strcat(path, filename);
-	
 	//check if file is in table; get locks for reader
 	if(fileLocks.find(path) == fileLocks.end()){
 		gate_keeper zuul;
@@ -146,7 +156,7 @@ void get_file(char* filename, char* cwd, int sockid){
 	FILE* doc = fopen(path, "rbx"); //the x makes fopen fail if file DNE
 	
 	//file DOES NOT exist, send file status, end function
-	if (!doc || filename == NULL) {
+	if (!doc) {
 		printf("%s does NOT exist\n", filename);
 		if (send(sockid, status, (int)strlen(status), 0) < 0){
 			perror("ERROR: Failed to send file status to client.\n");
