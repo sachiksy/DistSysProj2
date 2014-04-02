@@ -179,6 +179,8 @@ void *get (void *threadinfo){
 		exit(EXIT_FAILURE);
 	}
 	printf("Command ID is: %s\n", whale);
+	printf("myftp>");
+	fflush(stdout);
 	
 	//insert into client terminate resolution map
 	arnold.insert(pair<char*, bool>(whale, false));
@@ -208,11 +210,11 @@ void *get (void *threadinfo){
 
 		//file exists
 		fwrite(msg, sizeof(char), sizeofile, file);
-		
 		//check terminate status
 		for(terminator::iterator man = arnold.begin();  man != arnold.end(); man++) {
 			if (strcmp(man->first, whale) == 0) {
 				if (man->second == true) {
+					printf("Breakout reached!\n"); //tkk
 					breakout = true;
 				}
 			}
@@ -269,6 +271,8 @@ void *put (void *threadinfo){
 		exit(EXIT_FAILURE);
 	}
 	printf("Command ID is: %s\n", whale);
+	printf("myftp>");
+	fflush(stdout);
 	
 	//insert into client terminate resolution map
 	arnold.insert(pair<char*, bool>(whale, false));
@@ -298,6 +302,8 @@ void *put (void *threadinfo){
 			}
 			if (breakout) {
 				printf("Terminating on server-side &PUT\n\n");
+				printf("myftp>");
+				fflush(stdout);
 				break;
 			}
 		}

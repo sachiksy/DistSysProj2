@@ -61,6 +61,7 @@ list<int> portList;							//list of ports in use or already used
 void lock_reader(gate_keeper *mutexGuard){
 	pthread_mutex_lock(&(mutexGuard->readMutex));
 	++(mutexGuard->readerCount);
+	printf("Thread %d got reader lock\n", pthread_self());//tkk
 	if(mutexGuard->readerCount==1){
 		pthread_mutex_lock(&(mutexGuard->dataMutex));
 	}
@@ -70,6 +71,7 @@ void lock_reader(gate_keeper *mutexGuard){
 void unlock_reader(gate_keeper *mutexGuard){
 	pthread_mutex_lock(&(mutexGuard->readMutex));
 	--(mutexGuard->readerCount);
+	printf("Thread %d released reader lock\n", pthread_self());//tkk
 	if(mutexGuard->readerCount==0){
 		pthread_mutex_unlock(&(mutexGuard->dataMutex));
 	}
@@ -78,9 +80,11 @@ void unlock_reader(gate_keeper *mutexGuard){
 
 void lock_writer(gate_keeper *mutexGuard){
 	pthread_mutex_lock(&(mutexGuard->dataMutex));
+	printf("Thread %d got writer lock\n", pthread_self());//tkk
 }
 
 void unlock_writer(gate_keeper *mutexGuard){
+	printf("Thread %d released writer lock\n", pthread_self());//tkk
 	pthread_mutex_unlock(&(mutexGuard->dataMutex));
 }
 
@@ -416,7 +420,7 @@ void *get (void *threadinfo){
 		while(sizeofile = (fread(msg, sizeof(char), BUFFER, file))) {
 			send(dataCon, msg, sizeofile, 0);
 			memset(msg, '\0', BUFFER);
-			
+			sleep(20); //tkk
 			//check terminate status
 			innerMap::iterator man;
 			man = crash[sockid].find(whale);
@@ -429,7 +433,6 @@ void *get (void *threadinfo){
 				break;
 			}
 		}
-
 		close(dataCon);
 		fclose(file);
 
@@ -562,7 +565,7 @@ void *put (void *threadinfo) {
 
 		//file exists
 		fwrite(msg, sizeof(char), sizeofile, file);
-		
+		sleep(20);//tkk
 		//check terminate status
 		innerMap::iterator man;
 		man = crash[sockid].find(whale);
