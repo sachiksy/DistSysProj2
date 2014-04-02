@@ -1,6 +1,6 @@
 prog: ftpclient.cpp ftpserver.cpp
 	g++ -std=c++0x ftpserver.cpp -Wall -pthread -o myftpserver
-	g++ ftpclient.cpp -Wall -o myftp
+	g++ ftpclient.cpp -Wall -pthread -o myftp
 	
 ser:
 	./myftpserver 1459 1460
