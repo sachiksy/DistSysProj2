@@ -12,6 +12,7 @@
 #include <fcntl.h>
 #include <map>
 #include <fstream>
+#include <pthread.h>
 
 using namespace std;
 
@@ -21,6 +22,14 @@ const char eof[] = "EOF";
 
 typedef map<char*, bool> terminator;
 terminator arnold;
+
+//ampersand thread data
+struct data_thread {
+	int sockid;
+	char* nameofile;
+	char* host;
+	char* path;
+};
 
 void put_file(char* fname, int client_id) {
 	//open file and send file status to server
@@ -140,6 +149,172 @@ int make_connection(const char *host, const char* port) {
 	return sock;
 }
 
+void *get (void *threadinfo){
+	struct data_thread *dt = (struct data_thread*) threadinfo;
+	int sock = dt->sockid;
+	char* dick = dt->nameofile;
+	char* host = dt->host;
+	char* path = dt->path;
+
+	char whale[BUFFER];
+	memset(whale, '\0', sizeof(whale));
+	
+	//recv port number for &GET data connection
+	if (recv(sock, whale, sizeof(whale), 0) < 0) {
+		perror("ERROR: Problems receiving Command ID from server.\n");
+		close(sock);
+		exit(EXIT_FAILURE);
+	}
+	printf("Data Connection Port is: %s\n", whale);
+	
+	//connect to data connection
+	int tempo;
+	tempo = make_connection(host, whale);
+	memset(whale, '\0', sizeof(whale));
+	
+	//recv command ID and print to screen so client knows it
+	if (recv(tempo, whale, sizeof(whale), 0) < 0) {
+		perror("ERROR: Problems receiving Command ID from server.\n");
+		close(tempo);
+		exit(EXIT_FAILURE);
+	}
+	printf("Command ID is: %s\n", whale);
+	
+	//insert into client terminate resolution map
+	arnold.insert(pair<char*, bool>(whale, false));
+	
+	//check file existence for cleanup later
+	ifstream ifile(dick);
+	bool existence = false;
+	if (ifile) {
+		existence = true;
+	}
+	ifile.close();
+	
+	//proceed with GET as normal
+	int sizeofile = 0;
+	char msg[BUFFER];
+	FILE *file = fopen(dick, "w");
+	bool breakout = false;
+
+	while(sizeofile = recv(tempo, msg, BUFFER, 0)) {
+		//file does not exist
+		if ((strcmp(msg, eof)) == 0) {
+			printf("File does not exist in client:%d's directory\n", tempo);
+			//delete empty file
+			remove(dick);
+			break;
+		}
+
+		//file exists
+		fwrite(msg, sizeof(char), sizeofile, file);
+		
+		//check terminate status
+		terminator::iterator man;
+		man = arnold.find(whale);
+		if (man != arnold.end()) {
+			if (man->second == true) {
+				breakout = true;
+			}
+		}
+		if (breakout) {
+			printf("Terminating on client-side\n");
+			//if overwrite existing file: keep, else delete new file
+			if (!existence) {
+				remove(path);
+			}
+			break;
+		}
+	}
+	close(tempo);
+	fclose(file);
+	//delete commandID from map
+	terminator::iterator rich;
+	rich = arnold.find(whale);
+	if (rich != arnold.end()) {
+		arnold.erase(rich++);
+	}
+	
+	//wait for thread to finish and then terminate it
+	pthread_exit(dt);
+}
+
+void *put (void *threadinfo){
+	struct data_thread *dt = (struct data_thread*) threadinfo;
+	int sock = dt->sockid;
+	char* dick = dt->nameofile;
+	char* host = dt->host;
+	char* path = dt->path;
+	
+	char whale[BUFFER];
+	memset(whale, '\0', sizeof(whale));
+	
+	//recv port number for &GET data connection
+	if (recv(sock, whale, sizeof(whale), 0) < 0) {
+		perror("ERROR: Problems receiving Command ID from server.\n");
+		close(sock);
+		exit(EXIT_FAILURE);
+	}
+	printf("Data Connection Port is: %s\n", whale);
+	
+	//connect to data connection
+	int tempo;
+	tempo = make_connection(argv[1], whale);
+	memset(whale, '\0', sizeof(whale));
+
+	//recv command ID and print to screen so client knows it
+	if (recv(tempo, whale, sizeof(whale), 0) < 0) {
+		perror("ERROR: Problems receiving Command ID from server.\n");
+		close(tempo);
+		exit(EXIT_FAILURE);
+	}
+	printf("Command ID is: %s\n", whale);
+	
+	//insert into client terminate resolution map
+	arnold.insert(pair<char*, bool>(whale, false));
+	
+	//proceed with PUT as normal
+	int sizeofile = 0;
+	char msg[BUFFER];
+	FILE *file = fopen(dick, "r");
+	bool breakout = false;
+	
+	if (file == NULL) {
+		printf("%s does not exist in local directory\n", dick);
+		send(tempo, eof, sizeof(eof), 0);
+	}
+	else {
+		while(sizeofile = fread(msg, sizeof(char), BUFFER, file)) {
+			send(tempo, msg, sizeofile, 0);
+			memset(msg, '\0', BUFFER);
+			
+			//check terminate status
+			terminator::iterator man;
+			man = arnold.find(whale);
+			if (man != arnold.end()) {
+				if (man->second == true) {
+					breakout = true;
+				}
+			}
+			if (breakout) {
+				printf("Terminating on server-side &GET\n");
+				break;
+			}
+		}
+		close(tempo);
+		fclose(file);
+		//delete commandID from map
+		terminator::iterator rich;
+		rich = arnold.find(whale);
+		if (rich != arnold.end()) {
+			arnold.erase(rich++);
+		}
+	}
+	
+	//wait for thread to finish and then terminate it
+	pthread_exit(dt);
+}
+
 int main(int argc, char *argv[]){
 	int sock, tsock, i, tempo;
 	char buf[BUFFER];
@@ -205,9 +380,6 @@ int main(int argc, char *argv[]){
 		// RECV/SEND for command: GET
 		if (strcmp(moby, "get") == 0) {
 			if (amperSand) {
-				char whale[BUFFER];
-				memset(whale, '\0', sizeof(whale));
-			
 				//send get <filename> <&> to server
 				i=write(sock, buf, strlen(buf));
 				if (i<0){
@@ -215,86 +387,24 @@ int main(int argc, char *argv[]){
 					close(sock);
 					exit(EXIT_FAILURE);
 				}
-				
-				//recv port number for &GET data connection
-				if (recv(sock, whale, sizeof(whale), 0) < 0) {
-					perror("ERROR: Problems receiving Command ID from server.\n");
-					close(sock);
-					exit(EXIT_FAILURE);
-				}
-				printf("Data Connection Port is: %s\n", whale);
-				
-				//connect to data connection
-				int tempo;
-				tempo = make_connection(argv[1], whale);
-				memset(whale, '\0', sizeof(whale));
-				
-				//recv command ID and print to screen so client knows it
-				if (recv(tempo, whale, sizeof(whale), 0) < 0) {
-					perror("ERROR: Problems receiving Command ID from server.\n");
-					close(tempo);
-					exit(EXIT_FAILURE);
-				}
-				printf("Command ID is: %s\n", whale);
-				
-				//insert into client terminate resolution map
-				arnold.insert(pair<char*, bool>(whale, false));
-				
-				//check file existence for cleanup later
-				ifstream ifile(dick);
-				bool existence = false;
-				if (ifile) {
-					existence = true;
-				}
-				ifile.close();
-				
-				//proceed with GET as normal
-				int sizeofile = 0;
-				char msg[BUFFER];
-				FILE *file = fopen(dick, "w");
-				bool breakout = false;
+			
+				char path[1024];
+				strcpy(path, homeDir);
+				strcat(path, "/");
+				strcat(path, dick);
+			
+				//create <GET &> thread, thread data struct
+				pthread_t thread_ID;
+				struct data_thread *dt = (data_thread*)malloc(sizeof(data_thread));
 
-				while(sizeofile = recv(tempo, msg, BUFFER, 0)) {
-					//file does not exist
-					if ((strcmp(msg, eof)) == 0) {
-						printf("File does not exist in client:%d's directory\n", tempo);
-						//delete empty file
-						remove(dick);
-						break;
-					}
-
-					//file exists
-					fwrite(msg, sizeof(char), sizeofile, file);
-					
-					//check terminate status
-					terminator::iterator man;
-					man = arnold.find(whale);
-					if (man != arnold.end()) {
-						if (man->second == true) {
-							breakout = true;
-						}
-					}
-					if (breakout) {
-						printf("Terminating on client-side\n");
-						//if overwrite existing file: keep, else delete new file
-						if (!existence) {
-							char path[1024];
-							strcpy(path, homeDir);
-							strcat(path, "/");
-							strcat(path, dick);
-							remove(path);
-						}
-						break;
-					}
-				}
-				close(tempo);
-				fclose(file);
-				//delete commandID from map
-				terminator::iterator rich;
-				rich = arnold.find(whale);
-				if (rich != arnold.end()) {
-					arnold.erase(rich++);
-				}
+				//initialize <GET &> thread data
+				dt->sockid = sock;
+				dt->nameofile = dick;
+				dt->host = argv[1];
+				dt->path = path;
+				
+				//initialize and start <GET &> thread
+				pthread_create(&thread_ID, NULL, get, (void *)dt);
 			}
 			else if(extraArgs){
 				printf("GET error: must have exactly one argument\n");
@@ -378,9 +488,6 @@ int main(int argc, char *argv[]){
 		} //if (strstr(buf, "get"))
 		else if (strcmp(moby, "put") == 0) {
 			if (amperSand) {
-				char whale[BUFFER];
-				memset(whale, '\0', sizeof(whale));
-
 				//send put <filename> <&> to server
 				i=write(sock, buf, strlen(buf));
 				if (i<0){
@@ -389,67 +496,23 @@ int main(int argc, char *argv[]){
 					exit(EXIT_FAILURE);
 				}
 				
-				//recv port number for &GET data connection
-				if (recv(sock, whale, sizeof(whale), 0) < 0) {
-					perror("ERROR: Problems receiving Command ID from server.\n");
-					close(sock);
-					exit(EXIT_FAILURE);
-				}
-				printf("Data Connection Port is: %s\n", whale);
-				
-				//connect to data connection
-				int tempo;
-				tempo = make_connection(argv[1], whale);
-				memset(whale, '\0', sizeof(whale));
+				char path[1024];
+				strcpy(path, homeDir);
+				strcat(path, "/");
+				strcat(path, dick);
+			
+				//create <PUT &> thread, thread data struct
+				pthread_t thread_ID;
+				struct data_thread *dt = (data_thread*)malloc(sizeof(data_thread));
 
-				//recv command ID and print to screen so client knows it
-				if (recv(tempo, whale, sizeof(whale), 0) < 0) {
-					perror("ERROR: Problems receiving Command ID from server.\n");
-					close(tempo);
-					exit(EXIT_FAILURE);
-				}
-				printf("Command ID is: %s\n", whale);
+				//initialize <PUT &> thread data
+				dt->sockid = sock;
+				dt->nameofile = dick;
+				dt->host = argv[1];
+				dt->path = path;
 				
-				//insert into client terminate resolution map
-				arnold.insert(pair<char*, bool>(whale, false));
-				
-				//proceed with PUT as normal
-				int sizeofile = 0;
-				char msg[BUFFER];
-				FILE *file = fopen(dick, "r");
-				bool breakout = false;
-				
-				if (file == NULL) {
-					printf("%s does not exist in local directory\n", dick);
-					send(tempo, eof, sizeof(eof), 0);
-				}
-				else {
-					while(sizeofile = fread(msg, sizeof(char), BUFFER, file)) {
-						send(tempo, msg, sizeofile, 0);
-						memset(msg, '\0', BUFFER);
-						
-						//check terminate status
-						terminator::iterator man;
-						man = arnold.find(whale);
-						if (man != arnold.end()) {
-							if (man->second == true) {
-								breakout = true;
-							}
-						}
-						if (breakout) {
-							printf("Terminating on server-side &GET\n");
-							break;
-						}
-					}
-					close(tempo);
-					fclose(file);
-					//delete commandID from map
-					terminator::iterator rich;
-					rich = arnold.find(whale);
-					if (rich != arnold.end()) {
-						arnold.erase(rich++);
-					}
-				}
+				//initialize and start <PUT &> thread
+				pthread_create(&thread_ID, NULL, put, (void *)dt);
 			}
 			else if(extraArgs){
 				printf("PUT error: must have exactly one argument\n");
