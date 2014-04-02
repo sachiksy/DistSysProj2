@@ -158,7 +158,7 @@ void get_file(char* filename, char* cwd, int sockid){
 	}			
 	lock_reader(&fileLocks[path]);
 	
-	FILE* doc = fopen(path, "rb");
+	FILE* doc = fopen(path, "rbx"); //the x makes fopen fail if file DNE
 	
 	//file DOES NOT exist, send file status, end function
 	if (!doc) {
@@ -426,7 +426,6 @@ void *get (void *threadinfo){
 				}
 			}
 			if (breakout) {
-				printf("Terminating on server-side &GET\n");
 				break;
 			}
 		}
@@ -446,6 +445,9 @@ void *get (void *threadinfo){
 		}
 		
 		unlock_reader(&fileLocks[path]);
+		
+		//wait for thread to finish and then terminate it
+		pthread_exit(dt);
 	}
 }
 
@@ -570,7 +572,6 @@ void *put (void *threadinfo) {
 			}
 		}
 		if (breakout) {
-			printf("Terminating on server-side &PUT\n");
 			//if overwrite existing file: keep, else delete new file
 			if (!existence) {
 				remove(path);
@@ -593,22 +594,34 @@ void *put (void *threadinfo) {
 	}
 	
 	unlock_writer(&fileLocks[path]);
+	
+	//wait for thread to finish and then terminate it
+	pthread_exit(dt);
 }
 
 //flip terminate status on
 void terminate(char* cmdID, int clientID){
-	printf("Finding target\n");	//tk
+	bool fool = false;
+
 	for (outerMap::iterator i = crash.begin(); i != crash.end(); ++i) {
 		if(i->first == clientID) {		
 			for (innerMap::iterator j = i->second.begin(); j != i->second.end(); ++j) {
 				if(strcmp(j->first, cmdID) == 0){
 					j->second = true;
 					printf("Termination Status Flipped On for Client:%d CommandID: %s\n", clientID, cmdID);
-				}
-				else {
-					printf("Invalid or Outdated Command ID\n");
+					fool = true;
 				}
 			}
+		}
+	}
+	if (!fool) {
+		printf("Command ID invalid or function completed before termination\n");
+	}
+	
+	printf("Contents of Post terminate() Map\n\n");
+	for (outerMap::iterator i = crash.begin(); i != crash.end(); ++i) {
+		for (innerMap::iterator j = i->second.begin(); j != i->second.end(); ++j) {
+			printf("%d %s %d: 1=True0=False\n", i->first, j->first, j->second);
 		}
 	}
 }
@@ -671,12 +684,12 @@ void *Echo (void *threadargs){
 				dt->sockid = sid;
 				dt->nameofile = cargs;
 				dt->pathname = path;
-
+				
 				//initialize and start <PUT &> thread
 				pthread_create(&thread_ID, NULL, get, (void *)dt);
 				
-				//wait for thread to finish and then terminate it
-				(void) pthread_join(thread_ID, NULL);
+				//join() causes main to stop and wait for this thread to complete, unacceptable
+				//(void) pthread_join(thread_ID, NULL);
 			}
 		} //get <filename> request
 		else if (strcmp(command, "put") == 0) {
@@ -701,14 +714,12 @@ void *Echo (void *threadargs){
 				//initialize and start <PUT &> thread
 				pthread_create(&thread_ID, NULL, put, (void *)dt);
 				
-				//wait for thread to finish and then terminate it
-				(void) pthread_join(thread_ID, NULL);
+				//join() causes main to stop and wait for this thread to complete, unacceptable
+				//(void) pthread_join(thread_ID, NULL);
 			}
 		} //put <filename> request
 		else if(strcmp(command, "terminate") == 0) {
-			printf("Termination request received\n");	//tk
 			terminate(cargs, sid);
-			printf("Where are you? cargs: %s\n", cargs);	//tk
 		}
 		else {
 			if(strcmp(command, "delete")==0){
@@ -818,34 +829,31 @@ void *Echo (void *threadargs){
 					}
 				}	
 			} //pwd request		
+			//diagnostic tool
 			else if (strcmp(command, "what") ==0) {
+				//print port list
 				printf("Contents of List\n\n");
 				list<int>::iterator master;
 				for(master = portList.begin(); master != portList.end(); ++master) {
 					printf("%d\n", *master);
 				}
 				
+				//pseudo command IDs
 				char* van = "whale";
 				char* ban = "headache";
 				
-				//terMap.insert(make_pair(1, make_pair(van, false)));
-				//terMap.insert(make_pair(2, make_pair(van, true)));
-				//terMap.insert(make_pair(2, make_pair(van, false)));	//won't print b/c insert does not replace
-				
-				/*for (auto it = terMap.cbegin(); it != terMap.cend(); ++it) {
-					printf("%d %s %d: 1=True0=False\n", it->first, it->second.first, it->second.second);
-				}*/
-				
+				//insertion
 				crash.insert(make_pair(1, innerMap()));
 				crash[1].insert(make_pair(van, false));
 				crash[1].insert(make_pair(ban, false));
-				crash.insert(make_pair(3, innerMap()));
-				crash[3].insert(make_pair(van, false));
-				crash[3].insert(make_pair(ban, false));
+				crash.insert(make_pair(5, innerMap()));
+				crash[5].insert(make_pair(van, false));
+				crash[5].insert(make_pair(ban, false));
 				
+				//deletion
 				outerMap::iterator out;
 				innerMap::iterator in;
-				int thr = 3;
+				int thr = 5;
 				out = crash.find(thr);
 				bool abc = (out != crash.end());
 				if (abc) {
@@ -856,13 +864,18 @@ void *Echo (void *threadargs){
 					}
 				}
 				
-				printf("Contents of MultiMap\n\n");
+				//terminate
+				terminate(van, 1);
+				
+				//print contents of map
+				printf("Contents of Layered Map\n\n");
 				for (outerMap::iterator i = crash.begin(); i != crash.end(); ++i) {
 					for (innerMap::iterator j = i->second.begin(); j != i->second.end(); ++j) {
-						printf("%d %s %d: 1=True0=False\n", i->first, j->first, j->second);
+						printf("%d %s %d: \t\t1=True0=False\n", i->first, j->first, j->second);
 					}
 				}
 				
+				//lil jon
 				strcpy(str, "WHAT!?!?!");
 			}
 			else if ( strcmp(command, "quit")==0 ){
@@ -930,7 +943,6 @@ void *Echo (void *threadargs){
 	
 	close(sid);
 	close(tid);
-	//(void) pthread_join(nator, NULL);
 
 	return NULL;
 }
