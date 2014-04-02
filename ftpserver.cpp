@@ -14,9 +14,10 @@
 #include <arpa/inet.h>		//needed for creating Internet addresses
 #include <unordered_map> 	//needed for hashmap
 #include <sstream>
-#include <map>
-#include <list>
-#include <algorithm>
+#include <map>				//termination status
+#include <list>				//used ports
+#include <algorithm>		//find() and replace
+#include <fstream>
 
 using namespace std;
 
@@ -39,19 +40,22 @@ struct data_thread {
 
 struct gate_keeper {
 	int readerCount;
+	char writeTest[1024];
 	pthread_mutex_t readMutex;
 	pthread_mutex_t dataMutex;
 	gate_keeper(){
 		readerCount=0;
 		pthread_mutex_init(&(readMutex), NULL);
 		pthread_mutex_init(&(dataMutex), NULL);
+		strcpy(writeTest, "untouched");
 	}
 };
 
 char homeDir[BUFFER];
 unordered_map<std::string, gate_keeper> fileLocks;
-typedef multimap<char*, bool> innerMap;		//server keeps track of command_ID and termination_status pairs
-multimap<int, innerMap> outerMap;			//server keeps track of client_ID < command_ID, termination_status > > pairs
+typedef map<char*, bool> innerMap;
+typedef map<int, innerMap> outerMap;		//server keeps track of < client_ID < command_ID, termination_status > > pairs
+outerMap crash;
 list<int> portList;							//list of ports in use or already used
 
 void lock_reader(gate_keeper *mutexGuard){
@@ -140,12 +144,13 @@ void get_file(char* filename, char* cwd, int sockid){
 		} //if (send(sockid, status, (int)strlen(status), 0) < 0)
 		return;
 	}
-	
+
 	//open file and send file status to client
 	char path[1024];
 	strcpy(path, cwd);
 	strcat(path, "/");
 	strcat(path, filename);
+	
 	//check if file is in table; get locks for reader
 	if(fileLocks.find(path) == fileLocks.end()){
 		gate_keeper zuul;
@@ -153,7 +158,7 @@ void get_file(char* filename, char* cwd, int sockid){
 	}			
 	lock_reader(&fileLocks[path]);
 	
-	FILE* doc = fopen(path, "rbx"); //the x makes fopen fail if file DNE
+	FILE* doc = fopen(path, "rb");
 	
 	//file DOES NOT exist, send file status, end function
 	if (!doc) {
@@ -376,21 +381,9 @@ void *get (void *threadinfo){
 
 	printf("Command ID: %u\n", yarn);
 	
-	multimap<int, innerMap>::iterator it;
-	//first insert client_id element into outerMap
-	it = outerMap.insert(make_pair (sockid, innerMap()));
-	//then insert command_id and termination_status into innerMap
-	it->second.insert(make_pair (whale, false));
-	
-	multimap<char*, bool>::iterator in_it;
-	
-	for (it = outerMap.begin(); it != outerMap.end(); it++) {
-		printf("new element: %d\n", it->first);
-		for (in_it = it->second.begin(); in_it != it->second.end(); in_it++) {
-			printf("%s =>", in_it->first);
-			printf(in_it->second ? " true\n" : " false\n");
-		}
-	}
+	//insert into server termination resolution map
+	crash.insert(make_pair(sockid, innerMap()));
+	crash[sockid].insert(make_pair(whale, false));
 	
 	//send command ID over data connection
 	if (send(dataCon, whale, sizeof(whale), 0) < 0) {
@@ -418,15 +411,41 @@ void *get (void *threadinfo){
 	}
 	//send file over data connection
 	else {
+		bool breakout = false;
+		
 		while(sizeofile = (fread(msg, sizeof(char), BUFFER, file))) {
 			send(dataCon, msg, sizeofile, 0);
 			memset(msg, '\0', BUFFER);
+			
+			//check terminate status
+			innerMap::iterator man;
+			man = crash[sockid].find(whale);
+			if (man != crash[sockid].end()) {
+				if (man->second == true) {
+					breakout = true;
+				}
+			}
+			if (breakout) {
+				printf("Terminating on server-side &GET\n");
+				break;
+			}
 		}
+
 		close(dataCon);
 		fclose(file);
-		unlock_reader(&fileLocks[path]);
+
+		//delete commandID from map
+		outerMap::iterator out;
+		innerMap::iterator in;
+		out = crash.find(sockid);
+		if (out != crash.end()) {
+			in = crash[sockid].find(whale);
+			if(in != crash[sockid].end()) {
+				crash[sockid].erase(in++);
+			}
+		}
 		
-		//delete successful commandID from multimap
+		unlock_reader(&fileLocks[path]);
 	}
 }
 
@@ -498,27 +517,23 @@ void *put (void *threadinfo) {
 	
 	printf("Command ID: %u\n", yarn);	//tk
 	
-	multimap<int, innerMap>::iterator it;
-	//first insert client_id element into outerMap
-	it = outerMap.insert(make_pair (sockid, innerMap()));
-	//then insert command_id and termination_status into innerMap
-	it->second.insert(make_pair (whale, false));
-	
-	multimap<char*, bool>::iterator in_it;
-	
-	for (it = outerMap.begin(); it != outerMap.end(); it++) {
-		printf("new element: %d\n", it->first);
-		for (in_it = it->second.begin(); in_it != it->second.end(); in_it++) {
-			printf("%s =>", in_it->first);
-			printf(in_it->second ? " true\n" : " false\n");
-		}
-	}
+	//insert into server termination resolution map
+	crash.insert(make_pair(sockid, innerMap()));
+	crash[sockid].insert(make_pair(whale, false));
 	
 	//send command ID
 	if (send(dataCon, whale, sizeof(whale), 0) < 0) {
 		perror("ERROR: Problems sending Command ID\n");
 		pthread_exit(NULL);
 	}
+	
+	//check file existence for cleanup later
+	ifstream ifile(path);
+	bool existence = false;
+	if (ifile) {
+		existence = true;
+	}
+	ifile.close();
 	
 	//proceed with PUT as normal
 	int sizeofile = 0;
@@ -546,53 +561,55 @@ void *put (void *threadinfo) {
 		//file exists
 		fwrite(msg, sizeof(char), sizeofile, file);
 		
-		for (it = outerMap.begin(); it != outerMap.end(); it++) {
-			if(it->first == sockid) {
-				for (in_it = it->second.begin(); in_it != it->second.end(); in_it++) {
-					if (in_it->first == whale) {
-						//terminate status is ON
-						if (in_it->second == 1) {
-							//delete file
-							remove(path);
-							breakout = true;
-							printf("Terminating...\n");	//tk
-						}
-					}
-				}
+		//check terminate status
+		innerMap::iterator man;
+		man = crash[sockid].find(whale);
+		if (man != crash[sockid].end()) {
+			if (man->second == true) {
+				breakout = true;
 			}
 		}
 		if (breakout) {
-			printf("Termination COMPLETE\n");	//tk
+			printf("Terminating on server-side &PUT\n");
+			//if overwrite existing file: keep, else delete new file
+			if (!existence) {
+				remove(path);
+			}
 			break;
 		}
 	}
 	close(dataCon);
 	fclose(file);
-	unlock_writer(&fileLocks[path]);
 	
-	//delete successful commandID from map(vector)
+	//delete commandID from map
+	outerMap::iterator out;
+	innerMap::iterator in;
+	out = crash.find(sockid);
+	if (out != crash.end()) {
+		in = crash[sockid].find(whale);
+		if(in != crash[sockid].end()) {
+			crash[sockid].erase(in++);
+		}
+	}
+	
+	unlock_writer(&fileLocks[path]);
 }
 
-//flip terminate status to true when cmdID matches in multimap
+//flip terminate status on
 void terminate(char* cmdID, int clientID){
-	bool exist = false;
-	multimap<int, innerMap>::iterator it;
-	multimap<char*, bool>::iterator in_it;
-	
-	for (it = outerMap.begin(); it != outerMap.end(); it++) {
-		//clientID/sockID match, search inner map
-		if(it->first == clientID) {
-			for (in_it = it->second.begin(); in_it != it->second.end(); in_it++) {
-				//commandID match, flip termination status to true
-				if(in_it->first == cmdID) {
-					in_it->second = true;
-					exist = true;
+	printf("Finding target\n");	//tk
+	for (outerMap::iterator i = crash.begin(); i != crash.end(); ++i) {
+		if(i->first == clientID) {		
+			for (innerMap::iterator j = i->second.begin(); j != i->second.end(); ++j) {
+				if(strcmp(j->first, cmdID) == 0){
+					j->second = true;
+					printf("Termination Status Flipped On for Client:%d CommandID: %s\n", clientID, cmdID);
+				}
+				else {
+					printf("Invalid or Outdated Command ID\n");
 				}
 			}
 		}
-	}
-	if (!exist) {
-		printf("Command ID invalid\n");
 	}
 }
 
@@ -689,12 +706,9 @@ void *Echo (void *threadargs){
 			}
 		} //put <filename> request
 		else if(strcmp(command, "terminate") == 0) {
-			if (isdigit(cargs[0])) {
-				terminate(cargs, sid);
-			}
-			else {
-				printf("Terminate requires a sequence of numbers\n");
-			}
+			printf("Termination request received\n");	//tk
+			terminate(cargs, sid);
+			printf("Where are you? cargs: %s\n", cargs);	//tk
 		}
 		else {
 			if(strcmp(command, "delete")==0){
@@ -811,19 +825,45 @@ void *Echo (void *threadargs){
 					printf("%d\n", *master);
 				}
 				
-				/*printf("Contents of MultiMap\n\n");
+				char* van = "whale";
+				char* ban = "headache";
 				
-				multimap<int, innerMap>::iterator it;
-				multimap<char*, bool>::iterator in_it;
+				//terMap.insert(make_pair(1, make_pair(van, false)));
+				//terMap.insert(make_pair(2, make_pair(van, true)));
+				//terMap.insert(make_pair(2, make_pair(van, false)));	//won't print b/c insert does not replace
 				
-				for (it = outerMap.begin(); it != outerMap.end(); ++it) {
-					printf("%d\n", it->first);
-					for (in_it = it->second.begin(); in_it != it->second.end(); ++in_it) {
-						printf("%s =>", in_it->first);
-						printf(in_it->second ? " true\n" : " false\n");
-					}
+				/*for (auto it = terMap.cbegin(); it != terMap.cend(); ++it) {
+					printf("%d %s %d: 1=True0=False\n", it->first, it->second.first, it->second.second);
 				}*/
-				strcpy(str, cargs);
+				
+				crash.insert(make_pair(1, innerMap()));
+				crash[1].insert(make_pair(van, false));
+				crash[1].insert(make_pair(ban, false));
+				crash.insert(make_pair(3, innerMap()));
+				crash[3].insert(make_pair(van, false));
+				crash[3].insert(make_pair(ban, false));
+				
+				outerMap::iterator out;
+				innerMap::iterator in;
+				int thr = 3;
+				out = crash.find(thr);
+				bool abc = (out != crash.end());
+				if (abc) {
+					in = crash[thr].find(van);
+					bool cba = (in != crash[thr].end());
+					if(cba) {
+						crash[thr].erase(in++);
+					}
+				}
+				
+				printf("Contents of MultiMap\n\n");
+				for (outerMap::iterator i = crash.begin(); i != crash.end(); ++i) {
+					for (innerMap::iterator j = i->second.begin(); j != i->second.end(); ++j) {
+						printf("%d %s %d: 1=True0=False\n", i->first, j->first, j->second);
+					}
+				}
+				
+				strcpy(str, "WHAT!?!?!");
 			}
 			else if ( strcmp(command, "quit")==0 ){
 				if (cargs!=NULL){
@@ -943,13 +983,13 @@ int main(int argc, char *argv[]){
 			perror("Cannot open client socket\n");
 			exit(EXIT_FAILURE);
 		}
-		printf("Client is connected:%d\n", client);
+		printf("Client is connected: %d\n", client);
 
 		if ((terminator = accept(tSock, (struct sockaddr *) &saddr, &addrlen)) < 0) {
 			perror ("Cannot open terminator socket\n");
 			exit(EXIT_FAILURE);
 		}
-		printf("Terminator is connected:%d\n", terminator);
+		printf("Terminator is connected: %d\n", terminator);
 		
 		data_arr[0].sid = client;
 		data_arr[0].termid = terminator;
