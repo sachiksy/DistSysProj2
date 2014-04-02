@@ -11,6 +11,7 @@
 #include <netdb.h>
 #include <fcntl.h>
 #include <map>
+#include <fstream>
 
 using namespace std;
 
@@ -18,7 +19,8 @@ using namespace std;
 
 const char eof[] = "EOF";
 
-map<char*, bool> arnold;
+typedef map<char*, bool> terminator;
+terminator arnold;
 
 void put_file(char* fname, int client_id) {
 	//open file and send file status to server
@@ -158,6 +160,12 @@ int main(int argc, char *argv[]){
 	tsock = make_connection(argv[1], argv[3]);
 	printf("sock: %d\ntsock: %d\n", sock, tsock);	//tk
 	
+	char homeDir[BUFFER];
+	//initialize home directory
+	if (getcwd(homeDir, sizeof(homeDir)) == NULL){
+		perror("Home Directory init error");
+	}
+	
 	//user input handling
 	while(strcmp(buf, "quit") != 0){
 		printf("myftp> ");
@@ -229,10 +237,22 @@ int main(int argc, char *argv[]){
 				}
 				printf("Command ID is: %s\n", whale);
 				
+				//insert into client terminate resolution map
+				arnold.insert(pair<char*, bool>(whale, false));
+				
+				//check file existence for cleanup later
+				ifstream ifile(dick);
+				bool existence = false;
+				if (ifile) {
+					existence = true;
+				}
+				ifile.close();
+				
 				//proceed with GET as normal
 				int sizeofile = 0;
 				char msg[BUFFER];
 				FILE *file = fopen(dick, "w");
+				bool breakout = false;
 
 				while(sizeofile = recv(tempo, msg, BUFFER, 0)) {
 					//file does not exist
@@ -245,9 +265,36 @@ int main(int argc, char *argv[]){
 
 					//file exists
 					fwrite(msg, sizeof(char), sizeofile, file);
+					
+					//check terminate status
+					terminator::iterator man;
+					man = arnold.find(whale);
+					if (man != arnold.end()) {
+						if (man->second == true) {
+							breakout = true;
+						}
+					}
+					if (breakout) {
+						printf("Terminating on client-side\n");
+						//if overwrite existing file: keep, else delete new file
+						if (!existence) {
+							char path[1024];
+							strcpy(path, homeDir);
+							strcat(path, "/");
+							strcat(path, dick);
+							remove(path);
+						}
+						break;
+					}
 				}
 				close(tempo);
 				fclose(file);
+				//delete commandID from map
+				terminator::iterator rich;
+				rich = arnold.find(whale);
+				if (rich != arnold.end()) {
+					arnold.erase(rich++);
+				}
 			}
 			else if(extraArgs){
 				printf("GET error: must have exactly one argument\n");
@@ -363,10 +410,14 @@ int main(int argc, char *argv[]){
 				}
 				printf("Command ID is: %s\n", whale);
 				
+				//insert into client terminate resolution map
+				arnold.insert(pair<char*, bool>(whale, false));
+				
 				//proceed with PUT as normal
 				int sizeofile = 0;
 				char msg[BUFFER];
 				FILE *file = fopen(dick, "r");
+				bool breakout = false;
 				
 				if (file == NULL) {
 					printf("%s does not exist in local directory\n", dick);
@@ -376,9 +427,28 @@ int main(int argc, char *argv[]){
 					while(sizeofile = fread(msg, sizeof(char), BUFFER, file)) {
 						send(tempo, msg, sizeofile, 0);
 						memset(msg, '\0', BUFFER);
+						
+						//check terminate status
+						terminator::iterator man;
+						man = arnold.find(whale);
+						if (man != arnold.end()) {
+							if (man->second == true) {
+								breakout = true;
+							}
+						}
+						if (breakout) {
+							printf("Terminating on server-side &GET\n");
+							break;
+						}
 					}
 					close(tempo);
 					fclose(file);
+					//delete commandID from map
+					terminator::iterator rich;
+					rich = arnold.find(whale);
+					if (rich != arnold.end()) {
+						arnold.erase(rich++);
+					}
 				}
 			}
 			else if(extraArgs){
@@ -410,6 +480,16 @@ int main(int argc, char *argv[]){
 					close(tsock);
 					close(sock);
 					exit(EXIT_FAILURE);
+				}
+				printf("Termination request sent to server\n");	//tk
+				
+				terminator::iterator blackbird;
+				blackbird = arnold.find(dick);
+				if (blackbird != arnold.end()) {
+					blackbird->second = true;
+				}
+				else {
+					printf("Invalid or Outdated Command ID\n");
 				}
 			}
 		}
