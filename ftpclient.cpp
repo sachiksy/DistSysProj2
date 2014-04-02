@@ -210,15 +210,15 @@ void *get (void *threadinfo){
 		fwrite(msg, sizeof(char), sizeofile, file);
 		
 		//check terminate status
-		terminator::iterator man;
-		man = arnold.find(whale);
-		if (man != arnold.end()) {
-			if (man->second == true) {
-				breakout = true;
+		for(terminator::iterator man = arnold.begin();  man != arnold.end(); man++) {
+			if (strcmp(man->first, whale) == 0) {
+				if (man->second == true) {
+					breakout = true;
+				}
 			}
 		}
 		if (breakout) {
-			printf("Terminating on client-side\n");
+			printf("Terminating on client-side &GET\n\n");
 			//if overwrite existing file: keep, else delete new file
 			if (!existence) {
 				remove(path);
@@ -229,10 +229,10 @@ void *get (void *threadinfo){
 	close(tempo);
 	fclose(file);
 	//delete commandID from map
-	terminator::iterator rich;
-	rich = arnold.find(whale);
-	if (rich != arnold.end()) {
-		arnold.erase(rich++);
+	for(terminator::iterator rich = arnold.begin();  rich != arnold.end(); rich++) {
+		if (strcmp(rich->first, whale) == 0) {
+			arnold.erase(rich++);
+		}
 	}
 	
 	//wait for thread to finish and then terminate it
@@ -259,7 +259,7 @@ void *put (void *threadinfo){
 	
 	//connect to data connection
 	int tempo;
-	tempo = make_connection(argv[1], whale);
+	tempo = make_connection(host, whale);
 	memset(whale, '\0', sizeof(whale));
 
 	//recv command ID and print to screen so client knows it
@@ -289,30 +289,54 @@ void *put (void *threadinfo){
 			memset(msg, '\0', BUFFER);
 			
 			//check terminate status
-			terminator::iterator man;
-			man = arnold.find(whale);
-			if (man != arnold.end()) {
-				if (man->second == true) {
-					breakout = true;
+			for(terminator::iterator man = arnold.begin();  man != arnold.end(); man++) {
+				if (strcmp(man->first, whale) == 0) {
+					if (man->second == true) {
+						breakout = true;
+					}
 				}
 			}
 			if (breakout) {
-				printf("Terminating on server-side &GET\n");
+				printf("Terminating on server-side &PUT\n\n");
 				break;
 			}
 		}
 		close(tempo);
 		fclose(file);
 		//delete commandID from map
-		terminator::iterator rich;
-		rich = arnold.find(whale);
-		if (rich != arnold.end()) {
-			arnold.erase(rich++);
+		for(terminator::iterator rich = arnold.begin();  rich != arnold.end(); rich++) {
+			if (strcmp(rich->first, whale) == 0) {
+				arnold.erase(rich++);
+			}
 		}
 	}
 	
 	//wait for thread to finish and then terminate it
 	pthread_exit(dt);
+}
+
+void terminate(char* arg) {
+	/*char* whale = "fuck";
+	char* bhale = "your";
+	char* nnale = "shitt";
+
+	arnold.insert(pair<char*, bool>(whale, false));
+	arnold.insert(pair<char*, bool>(bhale, false));
+	arnold.insert(pair<char*, bool>(nnale, false));*/
+	
+	bool fool = false;
+	
+	for(terminator::iterator i = arnold.begin();  i != arnold.end(); i++) {
+		if (strcmp(i->first, arg) == 0) {
+			i->second = true;
+			printf("Termination Status Flipped On\n");
+			fool = true;
+		}
+		printf("%s == %d\n", i->first, i->second);
+	}
+	if(!fool) {
+		printf("Command ID invalid or function completed before termination\n");
+	}
 }
 
 int main(int argc, char *argv[]){
@@ -544,16 +568,8 @@ int main(int argc, char *argv[]){
 					close(sock);
 					exit(EXIT_FAILURE);
 				}
-				printf("Termination request sent to server\n");	//tk
 				
-				terminator::iterator blackbird;
-				blackbird = arnold.find(dick);
-				if (blackbird != arnold.end()) {
-					blackbird->second = true;
-				}
-				else {
-					printf("Invalid or Outdated Command ID\n");
-				}
+				terminate(dick);
 			}
 		}
 		// WRITE/READ for commands: LS, PWD
