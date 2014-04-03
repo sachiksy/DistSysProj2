@@ -420,7 +420,7 @@ void *get (void *threadinfo){
 		while(sizeofile = (fread(msg, sizeof(char), BUFFER, file))) {
 			send(dataCon, msg, sizeofile, 0);
 			memset(msg, '\0', BUFFER);
-			sleep(20); //tkk
+			//sleep(20); //tkk
 			//check terminate status
 			innerMap::iterator man;
 			man = crash[sockid].find(whale);
@@ -565,7 +565,7 @@ void *put (void *threadinfo) {
 
 		//file exists
 		fwrite(msg, sizeof(char), sizeofile, file);
-		sleep(20);//tkk
+		//sleep(20);//tkk
 		//check terminate status
 		innerMap::iterator man;
 		man = crash[sockid].find(whale);

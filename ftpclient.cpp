@@ -214,13 +214,14 @@ void *get (void *threadinfo){
 		for(terminator::iterator man = arnold.begin();  man != arnold.end(); man++) {
 			if (strcmp(man->first, whale) == 0) {
 				if (man->second == true) {
-					printf("Breakout reached!\n"); //tkk
 					breakout = true;
 				}
 			}
 		}
 		if (breakout) {
-			printf("Terminating on client-side &GET\n\n");
+			printf("\nTerminating on client-side &GET\n\n");
+			printf("myftp>");
+			fflush(stdout);
 			//if overwrite existing file: keep, else delete new file
 			if (!existence) {
 				remove(path);
@@ -301,7 +302,7 @@ void *put (void *threadinfo){
 				}
 			}
 			if (breakout) {
-				printf("Terminating on server-side &PUT\n\n");
+				printf("\nTerminating on server-side &PUT\n\n");
 				printf("myftp>");
 				fflush(stdout);
 				break;
