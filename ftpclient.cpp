@@ -17,6 +17,7 @@
 using namespace std;
 
 #define BUFFER 1024
+#define THREAD 100
 
 const char eof[] = "EOF";
 
@@ -179,8 +180,6 @@ void *get (void *threadinfo){
 		exit(EXIT_FAILURE);
 	}
 	printf("Command ID is: %s\n", whale);
-	printf("myftp>");
-	fflush(stdout);
 	
 	//insert into client terminate resolution map
 	arnold.insert(pair<char*, bool>(whale, false));
@@ -210,11 +209,11 @@ void *get (void *threadinfo){
 
 		//file exists
 		fwrite(msg, sizeof(char), sizeofile, file);
+		
 		//check terminate status
 		for(terminator::iterator man = arnold.begin();  man != arnold.end(); man++) {
 			if (strcmp(man->first, whale) == 0) {
 				if (man->second == true) {
-					printf("Breakout reached!\n"); //tkk
 					breakout = true;
 				}
 			}
@@ -238,7 +237,7 @@ void *get (void *threadinfo){
 	}
 	
 	//wait for thread to finish and then terminate it
-	pthread_exit(dt);
+	pthread_exit(NULL);
 }
 
 void *put (void *threadinfo){
@@ -271,8 +270,6 @@ void *put (void *threadinfo){
 		exit(EXIT_FAILURE);
 	}
 	printf("Command ID is: %s\n", whale);
-	printf("myftp>");
-	fflush(stdout);
 	
 	//insert into client terminate resolution map
 	arnold.insert(pair<char*, bool>(whale, false));
@@ -302,8 +299,6 @@ void *put (void *threadinfo){
 			}
 			if (breakout) {
 				printf("Terminating on server-side &PUT\n\n");
-				printf("myftp>");
-				fflush(stdout);
 				break;
 			}
 		}
@@ -371,6 +366,8 @@ int main(int argc, char *argv[]){
 		perror("Home Directory init error");
 	}
 	
+	int threadMAX = 0;
+	
 	//user input handling
 	while(strcmp(buf, "quit") != 0){
 		printf("myftp> ");
@@ -407,6 +404,11 @@ int main(int argc, char *argv[]){
 			}
 		}
 		
+		//dont want to access a thread out of bounds
+		if (threadMAX == THREAD) {
+			threadMAX = 0;
+		}
+		
 		// RECV/SEND for command: GET
 		if (strcmp(moby, "get") == 0) {
 			if (amperSand) {
@@ -417,6 +419,9 @@ int main(int argc, char *argv[]){
 					close(sock);
 					exit(EXIT_FAILURE);
 				}
+				
+				printf("threadMAX: %d\n", threadMAX);	//tk
+				threadMAX = threadMAX + 1;
 			
 				char path[1024];
 				strcpy(path, homeDir);
@@ -424,17 +429,17 @@ int main(int argc, char *argv[]){
 				strcat(path, dick);
 			
 				//create <GET &> thread, thread data struct
-				pthread_t thread_ID;
-				struct data_thread *dt = (data_thread*)malloc(sizeof(data_thread));
+				pthread_t thread_ID[THREAD];
+				struct data_thread dt[THREAD];
 
 				//initialize <GET &> thread data
-				dt->sockid = sock;
-				dt->nameofile = dick;
-				dt->host = argv[1];
-				dt->path = path;
+				dt[threadMAX].sockid = sock;
+				dt[threadMAX].nameofile = dick;
+				dt[threadMAX].host = argv[1];
+				dt[threadMAX].path = path;
 				
 				//initialize and start <GET &> thread
-				pthread_create(&thread_ID, NULL, get, (void *)dt);
+				pthread_create(&thread_ID[threadMAX], NULL, get, (void *) &dt[threadMAX]);
 			}
 			else if(extraArgs){
 				printf("GET error: must have exactly one argument\n");
