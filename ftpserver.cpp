@@ -22,6 +22,7 @@
 using namespace std;
 
 #define BUFFER 1024
+#define THREAD 100	//nike can handle up to 300 per user but we should save some threads for other things
 
 const char eof[] = "EOF";
 
@@ -61,7 +62,6 @@ list<int> portList;							//list of ports in use or already used
 void lock_reader(gate_keeper *mutexGuard){
 	pthread_mutex_lock(&(mutexGuard->readMutex));
 	++(mutexGuard->readerCount);
-	printf("Thread %d got reader lock\n", pthread_self());//tkk
 	if(mutexGuard->readerCount==1){
 		pthread_mutex_lock(&(mutexGuard->dataMutex));
 	}
@@ -71,7 +71,6 @@ void lock_reader(gate_keeper *mutexGuard){
 void unlock_reader(gate_keeper *mutexGuard){
 	pthread_mutex_lock(&(mutexGuard->readMutex));
 	--(mutexGuard->readerCount);
-	printf("Thread %d released reader lock\n", pthread_self());//tkk
 	if(mutexGuard->readerCount==0){
 		pthread_mutex_unlock(&(mutexGuard->dataMutex));
 	}
@@ -80,11 +79,9 @@ void unlock_reader(gate_keeper *mutexGuard){
 
 void lock_writer(gate_keeper *mutexGuard){
 	pthread_mutex_lock(&(mutexGuard->dataMutex));
-	printf("Thread %d got writer lock\n", pthread_self());//tkk
 }
 
 void unlock_writer(gate_keeper *mutexGuard){
-	printf("Thread %d released writer lock\n", pthread_self());//tkk
 	pthread_mutex_unlock(&(mutexGuard->dataMutex));
 }
 
@@ -420,7 +417,7 @@ void *get (void *threadinfo){
 		while(sizeofile = (fread(msg, sizeof(char), BUFFER, file))) {
 			send(dataCon, msg, sizeofile, 0);
 			memset(msg, '\0', BUFFER);
-			sleep(20); //tkk
+			
 			//check terminate status
 			innerMap::iterator man;
 			man = crash[sockid].find(whale);
@@ -433,6 +430,7 @@ void *get (void *threadinfo){
 				break;
 			}
 		}
+
 		close(dataCon);
 		fclose(file);
 
@@ -450,7 +448,7 @@ void *get (void *threadinfo){
 		unlock_reader(&fileLocks[path]);
 		
 		//wait for thread to finish and then terminate it
-		pthread_exit(dt);
+		pthread_exit(NULL);
 	}
 }
 
@@ -640,6 +638,8 @@ void *Echo (void *threadargs){
 	
 	strcpy(cwd, homeDir);
 	
+	int threadMAX = 0;
+	
 	while(strcmp(str, "quit")!=0){
 		memset(str, '\0', BUFFER);
 		if (read(sid, str, BUFFER)<0){
@@ -667,6 +667,10 @@ void *Echo (void *threadargs){
 			}
 		}
 		
+		//dont want to access a thread out of bounds
+		if (threadMAX == THREAD) {
+			threadMAX = 0;
+		}
 		
 		//Switch for the 7 main commands (not including exit). Else is echo
 		if(strcmp(command, "get")==0) {
@@ -674,22 +678,25 @@ void *Echo (void *threadargs){
 				get_file(cargs, cwd, sid);
 			}
 			else {
+				printf("threadMAX: %d\n", threadMAX);	//tk
+				threadMAX = threadMAX + 1;
+			
 				char path[1024];
 				strcpy(path, cwd);
 				strcat(path, "/");
 				strcat(path, cargs);
 			
 				//create <GET &> thread, thread data struct
-				pthread_t thread_ID;
-				struct data_thread *dt = (data_thread*)malloc(sizeof(data_thread));
-
+				pthread_t thread_ID[THREAD];
+				struct data_thread dt[THREAD];
+				
 				//initialize <GET &> thread data
-				dt->sockid = sid;
-				dt->nameofile = cargs;
-				dt->pathname = path;
+				dt[threadMAX].sockid = sid;
+				dt[threadMAX].nameofile = cargs;
+				dt[threadMAX].pathname = path;
 				
 				//initialize and start <PUT &> thread
-				pthread_create(&thread_ID, NULL, get, (void *)dt);
+				pthread_create(&thread_ID[threadMAX], NULL, get, (void *) &dt[threadMAX]);
 				
 				//join() causes main to stop and wait for this thread to complete, unacceptable
 				//(void) pthread_join(thread_ID, NULL);
@@ -700,6 +707,8 @@ void *Echo (void *threadargs){
 				put_file(cargs, cwd, sid);
 			}
 			else {
+				threadMAX = threadMAX + 1;
+			
 				char path[1024];
 				strcpy(path, cwd);
 				strcat(path, "/");
@@ -986,13 +995,18 @@ int main(int argc, char *argv[]){
 	
 	//Accepts a client and calls the echo function
 	int m, client, terminator; //tk
-	int numThreads = 5;
+	int numMAX = 0;
+	int numThreads = 20;
 	pthread_t threads[numThreads];
 	struct thread_data data_arr[numThreads];
 	//store details about the client who has connected
 	struct sockaddr_in saddr;
 	unsigned int addrlen = sizeof(saddr);
 	while (1){
+		if (numMAX == numThreads) {
+			numMAX = 0;
+		}
+	
 		//accept and create a separate socket for client(s)
 		if ((client = accept(nSock, (struct sockaddr *) &saddr, &addrlen)) < 0) {
 			perror("Cannot open client socket\n");
@@ -1006,10 +1020,12 @@ int main(int argc, char *argv[]){
 		}
 		printf("Terminator is connected: %d\n", terminator);
 		
-		data_arr[0].sid = client;
-		data_arr[0].termid = terminator;
+		numMAX = numMAX + 1;
 		
-		m = pthread_create(&threads[0], NULL, Echo, (void *) &data_arr[0]);
+		data_arr[numMAX].sid = client;
+		data_arr[numMAX].termid = terminator;
+		
+		m = pthread_create(&threads[numMAX], NULL, Echo, (void *) &data_arr[numMAX]);
 		if (m){
 			perror("Pthread");
 			exit(-5);
