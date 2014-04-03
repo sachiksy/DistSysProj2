@@ -565,7 +565,7 @@ void *put (void *threadinfo) {
 
 		//file exists
 		fwrite(msg, sizeof(char), sizeofile, file);
-		sleep(20);//tkk
+		
 		//check terminate status
 		innerMap::iterator man;
 		man = crash[sockid].find(whale);
